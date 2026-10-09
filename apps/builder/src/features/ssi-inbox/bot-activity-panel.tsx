@@ -28,14 +28,17 @@ export function SsiBotActivityPanel({
       messages
         .filter(
           (message) =>
+            message.workspaceId === conversation.workspaceId &&
             message.conversationId === conversation.id &&
             message.messageType === "outgoing" &&
             message.senderType === "bot" &&
             !message.deletedAt,
         )
-        .slice(-3)
-        .reverse(),
-    [conversation.id, messages],
+        // Loaded pages and websocket batches are not guaranteed chronological.
+        // Sort a copy so the latest events win without mutating Zustand state.
+        .sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime())
+        .slice(0, 3),
+    [conversation.id, conversation.workspaceId, messages],
   )
   const active = isConversationActive(conversation) && threadState !== "standby"
   const botStatus =
