@@ -21,6 +21,8 @@ jobs:
     timeout-minutes: 45
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
       - name: Verify MIT source boundary
         id: license
         continue-on-error: true # Collect diagnostics, but fail the job at the final gate.
@@ -29,6 +31,12 @@ jobs:
           test ! -e apps/builder/src/enterprise
           test ! -e packages/database/src/schema/enterprise
           test ! -e packages/database/src/relations/enterprise
+          # Audit reachable commit history, not only the checked-out worktree.
+          # Other obsolete repository branches are not part of HEAD ancestry.
+          if git rev-list --objects HEAD | grep -E ' (apps/builder/src/enterprise/|packages/database/src/schema/enterprise/|packages/database/src/relations/enterprise/)'; then
+            echo 'STOP-SHIP: restricted source exists in reachable commit ancestry' >&2
+            exit 1
+          fi
           if find packages apps integrations -type f -iname 'LICENSE*' -exec grep -l 'ChatbotX Commercial License' {} + | grep -q .; then
             echo 'STOP-SHIP: unreviewed nested Commercial License (issue #4)' >&2
             exit 1
