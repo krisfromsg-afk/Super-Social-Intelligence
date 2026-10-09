@@ -38,6 +38,11 @@ jobs:
       - name: Install pinned dependencies
         id: install
         run: pnpm install --frozen-lockfile
+      - name: SSI Drizzle schema migration drift
+        id: schema_drift
+        if: steps.install.outcome == 'success'
+        continue-on-error: true
+        run: pnpm --filter @chatbotx.io/database db:check-drift
       - name: Builder Vitest regression
         id: builder
         if: steps.install.outcome == 'success'
@@ -72,9 +77,11 @@ jobs:
           echo "Business concurrency tests: ${{ steps.business.outcome }}"
           echo "Business types: ${{ steps.business_types.outcome }}"
           echo "License boundary: ${{ steps.license.outcome }}"
+          echo "Schema migration drift: ${{ steps.schema_drift.outcome }}"
           test "${{ steps.builder.outcome }}" = "success"
           test "${{ steps.worker.outcome }}" = "success"
           test "${{ steps.worker_types.outcome }}" = "success"
           test "${{ steps.business.outcome }}" = "success"
           test "${{ steps.business_types.outcome }}" = "success"
           test "${{ steps.license.outcome }}" = "success"
+          test "${{ steps.schema_drift.outcome }}" = "success"
