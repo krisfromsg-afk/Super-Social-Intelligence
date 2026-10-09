@@ -48,6 +48,10 @@ jobs:
         run: pnpm --filter builder exec vitest run src/features/ssi-inbox/__tests__/human-only.test.ts
       - name: Verify cross-tab bot handover events
         run: pnpm --filter builder exec vitest run src/features/ssi-inbox/__tests__/bot-realtime-patch.test.ts
+      - name: Verify Inbox thread layout regression
+        run: pnpm --filter builder exec vitest run __tests__/message-thread-pane-scroll.test.tsx
+      - name: Verify atomic Human Only takeover
+        run: pnpm --filter @chatbotx.io/business exec vitest run src/conversation/__tests__/conversation.service.test.ts
       - name: Check types (builder)
         run: pnpm --filter builder check-types
       - name: Build builder
