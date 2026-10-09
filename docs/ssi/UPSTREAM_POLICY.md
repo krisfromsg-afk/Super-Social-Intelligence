@@ -4,17 +4,19 @@
 
 - Upstream: https://github.com/ChatbotXIO/ChatbotX
 - Source commit: `f1ca4a8f74cc08ca68d601ba2ce0e58bd9c5e67c`
-- License: root LICENSE says MIT for code outside `apps/builder/src/enterprise` and third-party exceptions; that enterprise directory uses a commercial license.
+- Licensing **STOP-SHIP**: the root LICENSE provides MIT terms outside `apps/builder/src/enterprise` subject to third-party restrictions, but the source snapshot also had a conflicting nested `packages/database/src/schema/enterprise/LICENSE` declaring **ChatbotX Commercial License**. Its scope is unresolved. The clean branch removes that entire schema subtree and directly dependent relation files, not just the license text; review remaining vendor/third-party sources before claiming license clearance.
 - Destination: https://github.com/krisfromsg-afk/Super-Social-Intelligence
-- Branch: `feat/ssi-foundation-rebrand`.
+- Historical import branch (blocked): `feat/ssi-foundation-rebrand`.
+- New clean-parent review branch (draft, build-blocked): `feat/ssi-clean-history-rebuild`.
 
 ## Source import constraints
 
-1. Never import `apps/builder/src/enterprise/**` into any SSI branch **or commit history**. Do not fork entire upstream Git history into destination public repo.
+1. Never import `apps/builder/src/enterprise/**` or the disputed `packages/database/src/schema/enterprise/**` into the clean SSI branch or its reachable commit history. Also exclude `packages/database/src/relations/enterprise/**` until clean replacements exist. Do not fork entire upstream Git history into the destination public repo.
 2. Use a single clean source snapshot with provenance and preserve original root LICENSE and third-party notices. Do not strip provenance or copyright.
 3. Scan for embedded credentials, secrets, binary executables and source locations with distinct licenses, and review generated artifacts.
 4. Audit import dependencies on commercial modules; replace imports with original SSI-compatible implementations or disable the related feature. Do not copy Enterprise implementation from build artifacts.
-5. Do not claim baseline build passes until CI commands run and record actual outcomes.
+5. Do not claim baseline build passes until CI commands run and record actual outcomes. On clean-source checkpoint, TypeScript remains red because the legacy model exports were removed.
+6. Automatic upstream import is disabled pending explicit license review. Do not use the historical branches as a merge base; rebuild from a clean parent and review tree ancestry, not just the final diff.
 
 ## Rebrand strategy
 
