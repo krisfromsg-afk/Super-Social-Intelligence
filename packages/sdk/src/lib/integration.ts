@@ -1,0 +1,834 @@
+import type { MetadataPayload } from "@chatbotx.io/flow-config"
+import type { AuthValue, Oauth2AuthValue } from "./auth"
+import type { ConnectionProvider } from "./connection"
+import {
+  AuthException,
+  AuthRefreshException,
+  IntegrationException,
+  SdkException,
+} from "./exception"
+import type { SendFlowStepData } from "./flow-step-data"
+import { sdkLogger } from "./logger"
+import type {
+  BaseConfig,
+  BulkThreadControlAction,
+  BulkThreadControlLimits,
+  BulkThreadControlResult,
+  ChannelPostDetails,
+  CommentAnchor,
+  Context,
+  HandleRequestProps,
+  Handler,
+  IncomingContact,
+  MessageButtonTemplate,
+  OutgoingContact,
+  OutgoingMessage,
+  ReceivedMessageResult,
+  ThreadControlAction,
+  ThreadControlRole,
+  ThreadControlUpdateResult,
+  ThreadControlWebhookResult,
+  ThreadOwnerResult,
+} from "./shared"
+
+// ---------------------------------------------------------------------------
+// Constants & internal helpers
+// ---------------------------------------------------------------------------
+
+/** Buffer in milliseconds before the access token expires when we should refresh proactively. */
+const AUTH_REFRESH_BUFFER_MS = 5 * 60 * 1000
+
+/** Maximum attempts at calling the per-integration `refreshAuth` handler. */
+const AUTH_REFRESH_MAX_ATTEMPTS = 3
+
+/** Base backoff in ms; multiplied by 2^(attempt-1) between attempts. */
+const AUTH_REFRESH_BACKOFF_BASE_MS = 250
+
+const sleep = (ms: number): Promise<void> =>
+  new Promise((resolve) => setTimeout(resolve, ms))
+
+// ---------------------------------------------------------------------------
+// Channel handler types
+// ---------------------------------------------------------------------------
+
+export type ChannelHandlerGroup = "message" | "conversation" | "contact" | "bot"
+
+export type RichResponseContentAttributes = {
+  executionId: string
+  buttonPayloads: Record<
+    string,
+    {
+      executionId: string
+      buttonId: string
+      payload:
+        | { type: "send_flow"; flowId: string }
+        | { type: "actions"; actions: Record<string, unknown>[] }
+        | { type: "text"; text: string }
+        | { type: "unsupported"; reason: string }
+    }
+  >
+}
+
+/** Base props for channel `sendFlowStep`; use {@link SendFlowStepProps} to narrow `data.step`. */
+export type ChannelSendFlowStepProps<IAuth extends AuthValue> = {
+  ctx: Context<IAuth>
+  data: {
+    contact: OutgoingContact
+    flowId: string
+    flowVersionId?: string
+    step: SendFlowStepData
+    quickReplies?: MessageButtonTemplate[]
+    metadata?: MetadataPayload
+    richResponse?: RichResponseContentAttributes
+    sendFrom?: "inbox"
+    /**
+     * See {@link CommentAnchor}. Honored by Messenger and Instagram; other
+     * channels ignore it.
+     */
+    commentAnchor?: CommentAnchor
+  }
+}
+export type OutgoingSendResult = {
+  messageIds: string[]
+  /** Number of discrete channel messages accepted by the provider. */
+  sentCount: number
+}
+
+export type MessageHandlers<
+  IAuth extends AuthValue,
+  TStep extends SendFlowStepData = SendFlowStepData,
+> = {
+  sendMessage: Handler<
+    {
+      ctx: Context<IAuth>
+      data: {
+        contact: OutgoingContact
+        message: OutgoingMessage
+        quickReplies?: MessageButtonTemplate[]
+        metadata?: MetadataPayload
+        sendFrom?: "inbox"
+      }
+    },
+    OutgoingSendResult
+  >
+  receiveMessage: Handler<
+    {
+      ctx: Context<IAuth>
+      data: {
+        integrationType: string
+        integrationIdentifier: string
+        payload: unknown
+      }
+    },
+    ReceivedMessageResult | null
+  >
+  sendFlowStep: Handler<
+    {
+      ctx: Context<IAuth>
+      data: {
+        contact: OutgoingContact
+        flowId: string
+        flowVersionId?: string
+        step: TStep
+        quickReplies?: MessageButtonTemplate[]
+        metadata?: MetadataPayload
+        richResponse?: RichResponseContentAttributes
+        sendFrom?: "inbox"
+        /** See {@link ChannelSendFlowStepProps}. */
+        commentAnchor?: CommentAnchor
+      }
+    },
+    OutgoingSendResult
+  >
+  handleMessageStatus?: Handler<
+    {
+      ctx: Context<IAuth>
+      data: {
+        integrationType: string
+        integrationIdentifier: string
+        payload: unknown
+      }
+    },
+    ReceivedMessageResult | null
+  >
+  getMessageMediaUrls: Handler<
+    {
+      ctx: Context<IAuth>
+      data: { graphMessageId: string }
+    },
+    // `sourceId` is the provider attachment id, so hydration can match fresh
+    // media to stored attachments by identity instead of array position.
+    Array<{ sourceId: string; url: string; mimeType: string | null }>
+  >
+}
+
+export type CommentHandlers<IAuth extends AuthValue> = {
+  sendComment: Handler<
+    {
+      ctx: Context<IAuth>
+      data: {
+        contact: OutgoingContact
+        message: OutgoingMessage
+        metadata?: MetadataPayload
+        sendFrom?: "inbox"
+      }
+    },
+    OutgoingSendResult
+  >
+  // Sends a comment-anchored private reply DM instead of a public comment
+  // reply. Same input/output shape as sendComment — `message.contentAttributes.
+  // replyToCommentId` identifies the comment being replied to.
+  sendPrivateReply: Handler<
+    {
+      ctx: Context<IAuth>
+      data: {
+        contact: OutgoingContact
+        message: OutgoingMessage
+        metadata?: MetadataPayload
+        sendFrom?: "inbox"
+      }
+    },
+    OutgoingSendResult
+  >
+  deleteComment: Handler<
+    {
+      ctx: Context<IAuth>
+      data: {
+        commentId: string
+      }
+    },
+    void
+  >
+  editComment: Handler<
+    {
+      ctx: Context<IAuth>
+      data: {
+        commentId: string
+        newText: string
+        newAttachmentUrl?: string
+      }
+    },
+    void
+  >
+  likeComment: Handler<
+    {
+      ctx: Context<IAuth>
+      data: {
+        commentId: string
+        liked: boolean
+      }
+    },
+    void
+  >
+  hideComment: Handler<
+    {
+      ctx: Context<IAuth>
+      data: {
+        commentId: string
+        hidden: boolean
+        /**
+         * The post the comment sits under, for channels whose hide endpoint
+         * needs it alongside the comment id (TikTok). Meta's does not, so this
+         * is optional and ignored there. Sourced from the comment message's
+         * `contentAttributes.postId`.
+         */
+        postId?: string
+      }
+    },
+    void
+  >
+}
+
+export type ConversationHandlers<IAuth extends AuthValue> = {
+  sendTyping: Handler<
+    {
+      ctx: Context<IAuth>
+      data: {
+        contact: OutgoingContact
+        typing: boolean
+        seconds?: number
+        /** Channel id of the message to anchor on (WhatsApp wamid). */
+        messageSourceId?: string
+      }
+    },
+    void
+  >
+  contactMarkAsRead: Handler<
+    {
+      ctx: Context<IAuth>
+      data: {
+        integrationType: string
+        integrationIdentifier: string
+        payload: unknown
+      }
+    },
+    void
+  >
+  agentMarkAsRead: Handler<
+    {
+      ctx: Context<IAuth>
+      data: {
+        contact: OutgoingContact
+        /** Channel id of the newest incoming message (WhatsApp wamid). */
+        messageSourceId?: string
+      }
+    },
+    void
+  >
+  /**
+   * Conversation routing: take/release/pass the thread with the channel.
+   * Returns the owner role after the action. Throws a `ChannelError` when the
+   * channel rejects the call.
+   */
+  updateThreadControl?: Handler<
+    {
+      ctx: Context<IAuth>
+      data: {
+        contact: OutgoingContact
+        action: ThreadControlAction
+        targetRole?: ThreadControlRole
+        metadata?: string
+      }
+    },
+    ThreadControlUpdateResult
+  >
+  /**
+   * Conversation routing, many threads at once: hands each contact to the AI
+   * agent, or takes it back with `text`. One call carries a channel-sized batch
+   * (Messenger: at most 50). A per-contact failure never throws: it is reported
+   * in `results`, one entry per input contact. A failure of the whole call
+   * (revoked token) throws a `ChannelError`. When the channel's quota runs low
+   * it stops early: the rest come back `deferred` with `retryAfterMs` set.
+   */
+  bulkUpdateThreadControl?: Handler<
+    {
+      ctx: Context<IAuth>
+      data: {
+        action: BulkThreadControlAction
+        contacts: OutgoingContact[]
+        text?: string
+      }
+    },
+    BulkThreadControlResult
+  >
+  /**
+   * The transport limits of `bulkUpdateThreadControl` (batch size, pacing, the
+   * wait after a refused call). Required for a channel that implements the bulk
+   * handler: the caller sizes and paces its calls from it.
+   */
+  bulkThreadControlLimits?: Handler<
+    { ctx: Context<IAuth> },
+    BulkThreadControlLimits
+  >
+  /**
+   * Conversation routing: asks the channel who owns the thread right now
+   * (a read, separate from take/release/pass). Optional: a channel without an
+   * owner-query API omits it, and callers treat that as "cannot sync".
+   */
+  getThreadOwner?: Handler<
+    {
+      ctx: Context<IAuth>
+      data: { contact: OutgoingContact }
+    },
+    ThreadOwnerResult
+  >
+  /**
+   * Conversation routing: turns a routing webhook job payload into a handover
+   * event or a standby message. `null` = nothing to do (routing off, malformed).
+   */
+  receiveThreadControlEvent?: Handler<
+    {
+      ctx: Context<IAuth>
+      data: {
+        integrationType: string
+        integrationIdentifier: string
+        payload: unknown
+      }
+    },
+    ThreadControlWebhookResult | null
+  >
+}
+
+/** Channel-agnostic label/tag descriptor (e.g. a Facebook Custom Label). */
+export type ChannelLabel = {
+  id: string
+  name: string
+}
+
+/** A single persistent-menu call-to-action (web_url or postback). */
+export type PersistentMenuCallToAction =
+  | {
+      type: "web_url"
+      title: string
+      url: string
+      webview_height_ratio?: "compact" | "tall" | "full"
+    }
+  | {
+      type: "postback"
+      title: string
+      payload: string
+    }
+
+/** One locale-scoped persistent menu definition. */
+export type PersistentMenu = {
+  locale: string
+  composer_input_disabled?: boolean
+  call_to_actions?: PersistentMenuCallToAction[]
+}
+
+/**
+ * Current user- and page-level custom settings returned by the channel's
+ * `getUserCustomSettings` handler (e.g. Facebook Messenger persistent menu +
+ * composer state).
+ */
+export type UserCustomSettings = {
+  userLevel?: PersistentMenu
+  pageLevel?: PersistentMenu
+}
+
+export type ContactHandlers<IAuth extends AuthValue> = {
+  getProfile: Handler<
+    {
+      ctx: Context<IAuth>
+      data: { includeProfileSnapshot?: boolean; sourceId: string }
+    },
+    IncomingContact
+  >
+  getProfileSnapshot?: Handler<
+    { ctx: Context<IAuth>; data: { sourceId: string } },
+    NonNullable<IncomingContact["profileSnapshot"]>
+  >
+  /**
+   * Describes a post the contact commented on (caption, permalink, …). Optional:
+   * only channels that track comments per post implement it
+   * (`postTrackingChannels`).
+   */
+  getPostDetails?: Handler<
+    { ctx: Context<IAuth>; data: { postId: string } },
+    ChannelPostDetails
+  >
+  getContactProfilePicUrl: Handler<
+    { ctx: Context<IAuth>; data: { sourceId: string } },
+    string | null
+  >
+  update: Handler<
+    // biome-ignore lint/suspicious/noExplicitAny: safe pass any data
+    { ctx: Context<IAuth>; data: any },
+    void
+  >
+  block: Handler<
+    { ctx: Context<IAuth>; data: { contact: OutgoingContact } },
+    void
+  >
+  unblock: Handler<
+    { ctx: Context<IAuth>; data: { contact: OutgoingContact } },
+    void
+  >
+  // Per-user label operations (optional; channels that support labels).
+  assignLabel?: Handler<
+    { ctx: Context<IAuth>; data: { labelId: string; sourceId: string } },
+    void
+  >
+  removeLabel?: Handler<
+    { ctx: Context<IAuth>; data: { labelId: string; sourceId: string } },
+    void
+  >
+  // Per-user persistent menu operations (optional; channels that support it).
+  setUserPersistentMenu?: Handler<
+    // biome-ignore lint/suspicious/noExplicitAny: channel-specific menu payload
+    { ctx: Context<IAuth>; data: { psid: string; persistentMenu: any } },
+    void
+  >
+  deleteUserPersistentMenu?: Handler<
+    { ctx: Context<IAuth>; data: { psid: string } },
+    void
+  >
+  // Read the current user + page level custom settings (channels that support it).
+  getUserCustomSettings?: Handler<
+    { ctx: Context<IAuth>; data: { psid: string } },
+    UserCustomSettings
+  >
+}
+
+export type BotHandlers<IAuth extends AuthValue> = {
+  // biome-ignore lint/suspicious/noExplicitAny: safe pass any data
+  updateProfile: Handler<{ ctx: Context<IAuth>; data: any }, void>
+  addBranding: Handler<
+    { ctx: Context<IAuth>; title: string; url: string },
+    void
+  >
+  deleteProfileFields: Handler<{ ctx: Context<IAuth>; fields: string[] }, void>
+  getProfilePictureUrl: Handler<{ ctx: Context<IAuth> }, string | undefined>
+  // Label operations (optional; channels that support labels).
+  createLabel?: Handler<
+    { ctx: Context<IAuth>; data: { pageId: string; name: string } },
+    ChannelLabel
+  >
+  // List the labels currently assigned to a specific user. `requestTimeoutMs`
+  // makes the lookup fail fast (no retries) for callers on a latency-sensitive
+  // path; omit it to keep the client's default timeout and retries.
+  listLabels?: Handler<
+    {
+      ctx: Context<IAuth>
+      data: { sourceId: string; requestTimeoutMs?: number }
+    },
+    ChannelLabel[]
+  >
+  deleteLabel?: Handler<
+    { ctx: Context<IAuth>; data: { labelId: string } },
+    void
+  >
+}
+
+export type IChannel<
+  IAuth extends AuthValue,
+  TStep extends SendFlowStepData = SendFlowStepData,
+> = {
+  message?: Partial<MessageHandlers<IAuth, TStep>>
+  comment?: Partial<CommentHandlers<IAuth>>
+  conversation?: Partial<ConversationHandlers<IAuth>>
+  contact?: Partial<ContactHandlers<IAuth>>
+  bot?: Partial<BotHandlers<IAuth>>
+}
+
+// ---------------------------------------------------------------------------
+// Integration definition
+// ---------------------------------------------------------------------------
+
+export type IntegrationDefinition<
+  IConfig extends BaseConfig,
+  IAuth extends AuthValue,
+  // biome-ignore lint/suspicious/noExplicitAny: wip
+  IActions extends Record<string, Handler<any, any>> = Record<string, never>,
+> = {
+  name: string
+  channels?: {
+    channel: IChannel<IAuth>
+    [key: string]: IChannel<IAuth>
+  }
+  actions: IActions
+  handleRequest: Handler<
+    HandleRequestProps<IConfig>,
+    Oauth2AuthValue | string | number
+  >
+  disconnect: Handler<IAuth, void>
+  refreshAuth?: Handler<{ auth: IAuth }, IAuth>
+  /** Adapter for connection authorization, identity, health, and webhooks. */
+  // biome-ignore lint/suspicious/noExplicitAny: credential shape varies per provider
+  connection?: ConnectionProvider<IAuth, any>
+}
+
+// ---------------------------------------------------------------------------
+// Handler type utilities
+// ---------------------------------------------------------------------------
+
+// biome-ignore lint/suspicious/noExplicitAny: structural function constraint
+type AsHandler<H> = H extends (...args: any[]) => any ? H : never
+
+/**
+ * Map an {@link IntegrationDefinition} to its full set of channel handler
+ * groups, with `IAuth` inferred from the definition. Used by
+ * {@link Integration.runChannelHandler} to derive props/return types from the
+ * SDK's authoritative `MessageHandlers` / `ConversationHandlers` /
+ * `ContactHandlers` / `BotHandlers` shapes.
+ */
+export type IntegrationHandlerMap<T> =
+  T extends IntegrationDefinition<
+    // biome-ignore lint/suspicious/noExplicitAny: matches Integration generic
+    any,
+    infer IAuth,
+    // biome-ignore lint/suspicious/noExplicitAny: matches Integration generic
+    any
+  >
+    ? {
+        message: MessageHandlers<IAuth>
+        comment: CommentHandlers<IAuth>
+        conversation: ConversationHandlers<IAuth>
+        contact: ContactHandlers<IAuth>
+        bot: BotHandlers<IAuth>
+      }
+    : never
+
+/** Props of a specific channel handler, derived from the SDK handler defs. */
+export type ChannelHandlerInput<
+  T,
+  Group extends keyof IntegrationHandlerMap<T>,
+  Name extends keyof IntegrationHandlerMap<T>[Group],
+> = Parameters<AsHandler<NonNullable<IntegrationHandlerMap<T>[Group][Name]>>>[0]
+
+/** Awaited return type of a specific channel handler. */
+export type ChannelHandlerResult<
+  T,
+  Group extends keyof IntegrationHandlerMap<T>,
+  Name extends keyof IntegrationHandlerMap<T>[Group],
+> = Awaited<
+  ReturnType<AsHandler<NonNullable<IntegrationHandlerMap<T>[Group][Name]>>>
+>
+
+// ---------------------------------------------------------------------------
+// Integration runtime
+// ---------------------------------------------------------------------------
+
+export class Integration<
+  // biome-ignore lint/suspicious/noExplicitAny: wip
+  T extends IntegrationDefinition<any, any, any>,
+> {
+  // biome-ignore lint/style/noParameterProperties: wip
+  constructor(private readonly props: T) {}
+
+  // -------------------------------------------------------------------------
+  // Public accessors
+  // -------------------------------------------------------------------------
+
+  get name(): string {
+    return this.props.name
+  }
+
+  get actions(): T["actions"] {
+    return this.props.actions || {}
+  }
+
+  get channels() {
+    // biome-ignore lint/suspicious/noExplicitAny: wip
+    return this.props.channels || ({} as { [key: string]: IChannel<any> })
+  }
+
+  get disconnect(): T["disconnect"] {
+    return this.props.disconnect
+  }
+
+  get connection(): T["connection"] {
+    return this.props.connection
+  }
+
+  get handleRequest(): T["handleRequest"] {
+    return this.props.handleRequest
+  }
+
+  get refreshAuth(): T["refreshAuth"] {
+    return this.props.refreshAuth
+  }
+
+  // -------------------------------------------------------------------------
+  // Public dispatch
+  // -------------------------------------------------------------------------
+
+  /**
+   * Run a top-level integration action (e.g. Google Sheets `insertRow`) with
+   * the same auth-refresh handling as {@link runChannelHandler}. If `props.ctx`
+   * is absent the call is forwarded as-is.
+   */
+  async runAction<ActionName extends keyof T["actions"]>(
+    actionName: ActionName,
+    props: Parameters<Exclude<T["actions"][ActionName], undefined>>[0],
+  ): Promise<ReturnType<Exclude<T["actions"][ActionName], undefined>>> {
+    const action = this.actions?.[actionName]
+    if (!action) {
+      throw new Error(`Action "${String(actionName)}" not found.`)
+    }
+    return (await this.invokeWithRefresh(
+      action as (input: unknown) => Promise<unknown>,
+      props,
+    )) as ReturnType<Exclude<T["actions"][ActionName], undefined>>
+  }
+
+  /**
+   * Dispatch a channel handler (message/conversation/contact/bot) with auth-refresh handling.
+   *
+   * Props and return type are derived from the SDK handler definitions
+   * ({@link MessageHandlers}, {@link ConversationHandlers},
+   * {@link ContactHandlers}, {@link BotHandlers}) — they cannot be overridden
+   * by the integration definition.
+   *
+   * Refreshes oauth2 tokens proactively (within {@link AUTH_REFRESH_BUFFER_MS} of expiry) and
+   * reactively (once, on AuthException). Refreshed auth is persisted via `ctx.authStore.save`.
+   */
+  async runChannelHandler<
+    Group extends keyof IntegrationHandlerMap<T>,
+    Name extends keyof IntegrationHandlerMap<T>[Group],
+  >(
+    group: Group,
+    name: Name,
+    props: ChannelHandlerInput<T, Group, Name>,
+  ): Promise<ChannelHandlerResult<T, Group, Name>> {
+    const handler = this.findChannelHandler(String(group), String(name))
+    if (!handler) {
+      throw new IntegrationException(
+        `Channel handler "${String(group)}.${String(name)}" not registered for integration "${this.name}".`,
+      )
+    }
+    return (await this.invokeWithRefresh(
+      handler,
+      props,
+    )) as ChannelHandlerResult<T, Group, Name>
+  }
+
+  /**
+   * Whether the channel registers `group.name`, so callers can check support
+   * without catching the `IntegrationException` `runChannelHandler` throws.
+   */
+  hasChannelHandler<
+    Group extends keyof IntegrationHandlerMap<T>,
+    Name extends keyof IntegrationHandlerMap<T>[Group],
+  >(group: Group, name: Name): boolean {
+    return this.findChannelHandler(String(group), String(name)) !== undefined
+  }
+
+  /** The single lookup behind `runChannelHandler` and `hasChannelHandler`. */
+  private findChannelHandler(
+    group: string,
+    name: string,
+  ): ((input: unknown) => Promise<unknown>) | undefined {
+    // biome-ignore lint/suspicious/noExplicitAny: heterogeneous handler shapes
+    const channel = this.channels?.channel as Record<string, any> | undefined
+    const handler = channel?.[group]?.[name]
+    return typeof handler === "function" ? handler : undefined
+  }
+
+  // -------------------------------------------------------------------------
+  // Auth-refresh internals
+  // -------------------------------------------------------------------------
+
+  /**
+   * Apply proactive + reactive auth refresh around a handler call. Looks for a
+   * `ctx` field on `props`; if absent, forwards the call unchanged so non-ctx
+   * actions still work.
+   */
+  private async invokeWithRefresh(
+    handler: (input: unknown) => Promise<unknown>,
+    props: unknown,
+  ): Promise<unknown> {
+    const initialCtx = (props as { ctx?: Context<AuthValue> } | undefined)?.ctx
+    if (!initialCtx?.auth) {
+      return await handler(props)
+    }
+
+    let ctx = initialCtx
+    if (this.shouldProactivelyRefresh(ctx.auth)) {
+      ctx = await this.refreshAndPersist(ctx)
+    }
+
+    try {
+      return await handler({ ...(props as object), ctx })
+    } catch (error) {
+      if (error instanceof AuthException && this.props.refreshAuth) {
+        ctx = await this.refreshAndPersist(ctx, { force: true })
+        return await handler({ ...(props as object), ctx })
+      }
+      throw error
+    }
+  }
+
+  private shouldProactivelyRefresh(auth: AuthValue): boolean {
+    if (!this.props.refreshAuth || auth.authType !== "oauth2") {
+      return false
+    }
+    const expiresAt = auth.tokens.expiresAt
+    if (!expiresAt) {
+      return false
+    }
+    const expiresAtMs = Date.parse(expiresAt)
+    if (Number.isNaN(expiresAtMs)) {
+      return false
+    }
+    return expiresAtMs - Date.now() < AUTH_REFRESH_BUFFER_MS
+  }
+
+  private async refreshAndPersist(
+    ctx: Context<AuthValue>,
+    opts?: { force?: boolean },
+  ): Promise<Context<AuthValue>> {
+    const run = async (): Promise<Context<AuthValue>> => {
+      let baseAuth = ctx.auth
+      if (ctx.authStore) {
+        try {
+          baseAuth = await ctx.authStore.load()
+        } catch (error) {
+          sdkLogger.warn(
+            { err: error, integration: this.name },
+            "Failed to reload integration auth; using in-memory auth",
+          )
+        }
+      }
+
+      if (
+        baseAuth.authType !== "oauth2" ||
+        !(opts?.force || this.shouldProactivelyRefresh(baseAuth))
+      ) {
+        return { ...ctx, auth: baseAuth }
+      }
+      const refreshAuth = this.props.refreshAuth
+      if (!refreshAuth) {
+        throw new SdkException(
+          `Integration "${this.name}" does not implement refreshAuth.`,
+        )
+      }
+
+      const newAuth = await this.refreshWithRetry(refreshAuth, baseAuth, ctx)
+      if (ctx.authStore) {
+        await ctx.authStore.save(newAuth)
+      }
+      return { ...ctx, auth: newAuth }
+    }
+
+    return ctx.authStore?.withLock ? await ctx.authStore.withLock(run) : run()
+  }
+
+  /** Refreshes OAuth2 auth when it is near expiry or when explicitly forced. */
+  async ensureFreshAuth(
+    ctx: Context<AuthValue>,
+    opts?: { force?: boolean },
+  ): Promise<Context<AuthValue>> {
+    return await this.refreshAndPersist(ctx, opts)
+  }
+
+  /**
+   * Call the per-integration `refreshAuth` with bounded exponential backoff.
+   * A terminal failure (`AuthException` or one recognized by
+   * `connection.isRevokedTokenError`) marks the integration offline. Transient
+   * failures throw after retries but retain the connection for the next
+   * scheduled refresh.
+   */
+  private async refreshWithRetry(
+    refreshAuth: NonNullable<T["refreshAuth"]>,
+    baseAuth: AuthValue,
+    ctx: Context<AuthValue>,
+  ): Promise<AuthValue> {
+    let lastError: unknown
+    let attempts = 0
+    let isTerminal = false
+    for (let attempt = 1; attempt <= AUTH_REFRESH_MAX_ATTEMPTS; attempt++) {
+      attempts = attempt
+      try {
+        return await refreshAuth({ auth: baseAuth })
+      } catch (err) {
+        lastError = err
+        isTerminal =
+          err instanceof AuthException ||
+          this.props.connection?.isRevokedTokenError?.(err) === true
+        if (isTerminal) {
+          break
+        }
+        if (attempt < AUTH_REFRESH_MAX_ATTEMPTS) {
+          await sleep(AUTH_REFRESH_BACKOFF_BASE_MS * 2 ** (attempt - 1))
+        }
+      }
+    }
+
+    if (isTerminal && ctx.authStore?.markOffline) {
+      try {
+        await ctx.authStore.markOffline(lastError)
+      } catch (error) {
+        sdkLogger.error(
+          { err: error, integration: this.name },
+          "Failed to mark integration auth offline",
+        )
+      }
+    }
+
+    throw new AuthRefreshException(
+      `Integration "${this.name}" auth refresh failed after ${attempts} attempt(s).`,
+      lastError,
+    )
+  }
+}

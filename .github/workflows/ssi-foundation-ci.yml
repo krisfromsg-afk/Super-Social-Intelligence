@@ -1,0 +1,64 @@
+name: SSI Foundation CI
+
+on:
+  push:
+    branches: [feat/ssi-foundation-rebrand, 'feat/ssi-*']
+    paths:
+      - 'apps/**'
+      - 'packages/**'
+      - 'integrations/**'
+      - 'pnpm-lock.yaml'
+      - 'package.json'
+      - '.github/workflows/ssi-foundation-ci.yml'
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  baseline:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+      - name: Verify MIT source boundary
+        id: license
+        continue-on-error: true # Collect diagnostics, but fail the job at the final gate.
+        shell: bash
+        run: |
+          test ! -e apps/builder/src/enterprise
+          test ! -e packages/database/src/schema/enterprise
+          test ! -e packages/database/src/relations/enterprise
+          if find packages apps integrations -type f -iname 'LICENSE*' -exec grep -l 'ChatbotX Commercial License' {} + | grep -q .; then
+            echo 'STOP-SHIP: unreviewed nested Commercial License (issue #4)' >&2
+            exit 1
+          fi
+          test -f LICENSE
+          grep -q 'Copyright (c) 2024-present AhaChat LLC' LICENSE
+          test -f packages/ai/package.json
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: pnpm
+      - name: Install workspace dependencies
+        run: pnpm install --frozen-lockfile
+      - name: Verify SSI sender classification unit tests
+        run: pnpm --filter builder exec vitest run src/features/ssi-inbox/__tests__/message-provenance.test.ts
+      - name: Verify permanent Human Only state
+        run: pnpm --filter builder exec vitest run src/features/ssi-inbox/__tests__/human-only.test.ts
+      - name: Verify cross-tab bot handover events
+        run: pnpm --filter builder exec vitest run src/features/ssi-inbox/__tests__/bot-realtime-patch.test.ts
+      - name: Verify Inbox thread layout regression
+        run: pnpm --filter builder exec vitest run __tests__/message-thread-pane-scroll.test.tsx
+      - name: Verify atomic Human Only takeover
+        run: pnpm --filter @chatbotx.io/business exec vitest run src/conversation/__tests__/conversation.service.test.ts
+      - name: Check types (builder)
+        run: pnpm --filter builder check-types
+      - name: Build builder
+        run: pnpm --filter builder build
+      - name: Enforce SSI licensing stop-ship
+        if: always()
+        run: |
+          echo "License audit result: ${{ steps.license.outcome }}"
+          test "${{ steps.license.outcome }}" = "success"

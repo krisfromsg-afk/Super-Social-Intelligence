@@ -1,0 +1,1538 @@
+import { MessageShardUnavailableError } from "@chatbotx.io/database/errors"
+import type {
+  ContentType,
+  ConversationAttributes,
+  FileType,
+} from "@chatbotx.io/database/partials"
+import { getSafeSinceTime } from "@chatbotx.io/database/repositories"
+import { verifyUserDataWebviewToken } from "@chatbotx.io/encryption"
+import type { GetUserDataStepSchema } from "@chatbotx.io/flow-config"
+import {
+  GET_USER_DATA_WEBVIEW_SELECTION_PAYLOAD_TYPE,
+  ReplyFormat,
+} from "@chatbotx.io/flow-config"
+import { beforeEach, describe, expect, test, vi } from "vitest"
+import type { ExecuteStepProps } from "../src/integration/handlers/flow"
+
+// --- mocks ---
+
+const lastMessage: {
+  current: {
+    text?: string | null
+    contentType: ContentType
+    contentAttributes?: Record<string, unknown> | null
+    attachments: { fileType: FileType; originPath: string }[]
+  } | null
+} = { current: null }
+const repositoryError: { current: Error | null } = { current: null }
+
+const contactInboxUpdateTracking = vi.fn(async () => undefined)
+const contactCustomFieldSetValueByKey = vi.fn(async () => undefined)
+const conversationUpdateChallenge = vi.fn(async () => undefined)
+const conversationConsumeChallenge = vi.fn(async () => true)
+const conversationRestoreChallengeIfAbsent = vi.fn(async () => true)
+const workspaceFindById = vi.fn(async () => ({ language: "en" }))
+const resolveTenantSettings = vi.fn(async () => ({
+  storageUrl: "https://cdn.example.com/",
+  appUrl: "https://app.example.com",
+}))
+
+vi.mock("@chatbotx.io/business", () => ({
+  contactCustomFieldService: {
+    setValueByKey: contactCustomFieldSetValueByKey,
+  },
+  contactInboxService: { updateTracking: contactInboxUpdateTracking },
+  conversationService: {
+    updateChallenge: conversationUpdateChallenge,
+    consumeChallenge: conversationConsumeChallenge,
+    restoreChallengeIfAbsent: conversationRestoreChallengeIfAbsent,
+  },
+  // Real normalizeLanguage collapses to "vi"/"en"/undefined via a supported-
+  // language allowlist; the handler only branches on "vi" vs. everything
+  // else, so a pass-through is behaviorally equivalent for these tests.
+  normalizeLanguage: (language?: string | null) => language ?? undefined,
+  resolveTenantSettings,
+  workspaceService: { findById: workspaceFindById },
+}))
+
+// Attachment values are stored as a public URL; mirror getPublicFileUrl's join
+// without loading the real module.
+vi.mock("@chatbotx.io/business/utils", () => ({
+  getPublicFileUrl: (path: string, base: string) => {
+    let key = path
+    if (key.startsWith("/")) {
+      key = key.slice(1)
+    }
+    return `${base}${key}`
+  },
+}))
+
+// validateUserData reads the last message via the shard-aware repository, not
+// db.query. Return the test-configured `lastMessage.current` as a 1-element
+// array (findLastByConversation's contract).
+vi.mock("@chatbotx.io/database/repositories", () => ({
+  createMessageRepository: vi.fn(async () => ({
+    findLastByConversation: vi.fn(() => {
+      if (repositoryError.current) {
+        throw repositoryError.current
+      }
+      return lastMessage.current ? [lastMessage.current] : []
+    }),
+  })),
+  getSafeSinceTime: vi.fn(() => new Date(0)),
+}))
+
+vi.mock("@chatbotx.io/database/partials", async (importOriginal) => {
+  const actual =
+    await importOriginal<typeof import("@chatbotx.io/database/partials")>()
+  return { ...actual }
+})
+
+vi.mock("@chatbotx.io/events", () => ({
+  emitCustomFieldChanged: vi.fn(),
+}))
+
+const chatQueueAdd = vi.fn(async () => ({ id: "job-1" }))
+vi.mock("@chatbotx.io/worker-config", () => ({
+  BROADCAST_SEND_PRIORITY: 5,
+  ChatJobAction: {
+    sendChatMessage: "sendChatMessage",
+    sendFlowMessage: "sendFlowMessage",
+  },
+  chatQueue: { add: chatQueueAdd },
+  IntegrationJobAction: { sendFlow: "sendFlow" },
+  integrationQueue: { add: vi.fn() },
+  getRedisConnection: vi.fn(() => ({})),
+}))
+
+vi.mock("@chatbotx.io/events/context", () => ({
+  webhookChannelOrigin: vi.fn(() => undefined),
+}))
+
+const waitForChatJobCompletion = vi.fn(async () => undefined)
+vi.mock("../src/integration/utils/message", () => ({
+  waitForChatJobCompletion,
+}))
+
+vi.mock("@chatbotx.io/utils", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@chatbotx.io/utils")>()
+  return {
+    ...actual,
+    createId: vi.fn(() => "test-id"),
+  }
+})
+
+vi.mock("../src/lib/logger", () => ({
+  logger: { error: vi.fn(), debug: vi.fn(), info: vi.fn(), warn: vi.fn() },
+}))
+
+// --- helpers ---
+
+const { getUserData } = await import(
+  "../src/integration/handlers/get-user-data"
+)
+
+beforeEach(() => {
+  repositoryError.current = null
+  chatQueueAdd.mockResolvedValue({ id: "job-1" })
+  waitForChatJobCompletion.mockResolvedValue(undefined)
+  contactInboxUpdateTracking.mockClear()
+  contactCustomFieldSetValueByKey.mockClear()
+  conversationUpdateChallenge.mockClear()
+  conversationUpdateChallenge.mockResolvedValue(undefined)
+  conversationConsumeChallenge.mockClear()
+  conversationConsumeChallenge.mockResolvedValue(true)
+  conversationRestoreChallengeIfAbsent.mockClear()
+  conversationRestoreChallengeIfAbsent.mockResolvedValue(true)
+  workspaceFindById.mockClear()
+  workspaceFindById.mockResolvedValue({ language: "en" })
+})
+
+type StepOverride = Partial<GetUserDataStepSchema>
+
+function makeProps(
+  replyFormat: ReplyFormat,
+  overrides: StepOverride = {},
+  attempts = 1,
+  lastAttemptAt: Date | string | number = new Date(),
+): ExecuteStepProps<GetUserDataStepSchema> {
+  return {
+    conversation: {
+      id: "conv-1",
+      workspaceId: "ws-1",
+      contactId: "contact-1",
+      assignedUserId: null,
+      assignedInboxTeamId: null,
+      // Legacy in-flight challenge (no challengeId) by default, mirroring a
+      // pre-challengeId production row: consumeCurrentChallenge falls back to
+      // the old unconditional clearChallenge behavior for it, so every
+      // pre-existing handleSkipOrError test below keeps its prior outcome.
+      // Tests exercising the new atomic-claim path override this with a
+      // challengeId.
+      additionalAttributes: {
+        challenge: {
+          type: "step",
+          data: {
+            flowId: "flow-1",
+            flowVersionId: "fv-1",
+            nodeId: "node-1",
+            stepId: "step-1",
+            attempts,
+            lastAttemptAt: new Date(lastAttemptAt),
+          },
+        },
+      },
+      lastActivityAt: new Date("2026-01-01T00:00:00Z"),
+      createdAt: new Date("2025-12-01T00:00:00Z"),
+    },
+    contactInbox: {
+      id: "ci-1",
+      contactId: "contact-1",
+      channel: "messenger",
+    },
+    flowVersion: {
+      id: "fv-1",
+      flowId: "flow-1",
+      nodes: [],
+      edges: [],
+    },
+    useLatestFlowVersion: false,
+    metadata: {
+      type: "broadcast",
+      broadcastId: "bc-1",
+      contactInboxId: "ci-1",
+    },
+    targetId: "node-1",
+    targetNodeId: "node-1",
+    step: {
+      id: "step-1",
+      stepType: "getUserData" as const,
+      message: "Please enter your email",
+      replyFormat,
+      outputFieldId: "field-1",
+      retryMessage: "Please try again",
+      skipButtonLabel: "Skip",
+      autoSkip: false,
+      autoSkipTimeUnit: "hours" as const,
+      autoSkipTimeValue: 1,
+      autoSkipFailAttempts: 3,
+      ...overrides,
+    } as GetUserDataStepSchema,
+    ctx: {
+      variables: {
+        conversation: {
+          challengeAttempts: { value: attempts },
+          challengeLastAttemptAt: { value: lastAttemptAt },
+        },
+      },
+    },
+  } as ExecuteStepProps<GetUserDataStepSchema>
+}
+
+function makeIncomingMessage(
+  overrides: Partial<NonNullable<(typeof lastMessage)["current"]>> = {},
+): NonNullable<(typeof lastMessage)["current"]> {
+  return {
+    text: null,
+    contentType: "text",
+    contentAttributes: null,
+    attachments: [],
+    ...overrides,
+  }
+}
+
+function expectLastInputFailureUpdate(
+  lastInputFailure: "timeout" | "invalid_input_attempts" | null,
+) {
+  expect(contactInboxUpdateTracking).toHaveBeenCalledWith({
+    contactInboxId: "ci-1",
+    contactId: "contact-1",
+    workspaceId: "ws-1",
+    data: { lastInputFailure },
+  })
+}
+
+function expectNoLastInputFailureUpdate() {
+  const callsWithLastInputFailure =
+    contactInboxUpdateTracking.mock.calls.filter(([update]) =>
+      Object.hasOwn(update.data, "lastInputFailure"),
+    )
+
+  expect(callsWithLastInputFailure).toHaveLength(0)
+}
+
+function expectCustomFieldWrite(value: string) {
+  expect(contactCustomFieldSetValueByKey).toHaveBeenCalledWith({
+    workspaceId: "ws-1",
+    contactId: "contact-1",
+    keyword: "field-1",
+    value,
+    allowBotFields: true,
+  })
+}
+
+function challengeClearCalls() {
+  return conversationUpdateChallenge.mock.calls.filter(
+    ([update]) => update.challenge === undefined,
+  )
+}
+
+function challengeSetCalls() {
+  return conversationUpdateChallenge.mock.calls.filter(
+    ([update]) => update.challenge !== undefined,
+  )
+}
+
+// --- tests ---
+
+describe("getUserData — validation logic", () => {
+  beforeEach(() => {
+    chatQueueAdd.mockClear()
+    lastMessage.current = null
+  })
+
+  test("anchors the message lookup on conversation.lastActivityAt, not contactInbox", async () => {
+    lastMessage.current = makeIncomingMessage({ text: "user@example.com" })
+    const props = makeProps(ReplyFormat.email)
+
+    await getUserData(props)
+
+    expect(getSafeSinceTime).toHaveBeenCalledWith(
+      props.conversation.lastActivityAt,
+      365 * 24 * 60 * 60 * 1000,
+    )
+  })
+
+  describe("email format", () => {
+    test("valid email → returns success", async () => {
+      lastMessage.current = makeIncomingMessage({ text: "user@example.com" })
+      const result = await getUserData(makeProps(ReplyFormat.email))
+      expect(result.status).toBe("success")
+      expectLastInputFailureUpdate(null)
+      expectCustomFieldWrite("user@example.com")
+    })
+
+    test("invalid email → returns retry", async () => {
+      lastMessage.current = makeIncomingMessage({ text: "not-an-email" })
+      const result = await getUserData(makeProps(ReplyFormat.email))
+      expect(result.status).toBe("retry")
+      expectNoLastInputFailureUpdate()
+    })
+  })
+
+  describe("number format", () => {
+    test("valid number → returns success", async () => {
+      lastMessage.current = makeIncomingMessage({ text: "42" })
+      const result = await getUserData(makeProps(ReplyFormat.number))
+      expect(result.status).toBe("success")
+    })
+
+    test("decimal number → returns success", async () => {
+      lastMessage.current = makeIncomingMessage({ text: "3.14" })
+      const result = await getUserData(makeProps(ReplyFormat.number))
+      expect(result.status).toBe("success")
+    })
+
+    test("non-numeric text → returns retry", async () => {
+      lastMessage.current = makeIncomingMessage({ text: "hello" })
+      const result = await getUserData(makeProps(ReplyFormat.number))
+      expect(result.status).toBe("retry")
+    })
+  })
+
+  describe("phone format", () => {
+    test("valid phone → returns success", async () => {
+      lastMessage.current = makeIncomingMessage({ text: "+1-555-123-4567" })
+      const result = await getUserData(makeProps(ReplyFormat.phone))
+      expect(result.status).toBe("success")
+    })
+
+    test("invalid phone → returns retry", async () => {
+      lastMessage.current = makeIncomingMessage({ text: "not-a-phone" })
+      const result = await getUserData(makeProps(ReplyFormat.phone))
+      expect(result.status).toBe("retry")
+    })
+  })
+
+  describe("link format", () => {
+    test("valid URL → returns success", async () => {
+      lastMessage.current = makeIncomingMessage({ text: "https://example.com" })
+      const result = await getUserData(makeProps(ReplyFormat.link))
+      expect(result.status).toBe("success")
+    })
+
+    test("invalid URL → returns retry", async () => {
+      lastMessage.current = makeIncomingMessage({ text: "not-a-url" })
+      const result = await getUserData(makeProps(ReplyFormat.link))
+      expect(result.status).toBe("retry")
+    })
+  })
+
+  describe("default (free text) format", () => {
+    test("any text → returns success", async () => {
+      lastMessage.current = makeIncomingMessage({ text: "anything goes" })
+      const result = await getUserData(makeProps(ReplyFormat.text))
+      expect(result.status).toBe("success")
+    })
+  })
+
+  describe("attachment formats", () => {
+    test("image attachment with image format → returns success", async () => {
+      lastMessage.current = makeIncomingMessage({
+        text: null,
+        attachments: [{ fileType: "image", originPath: "/img.jpg" }],
+      })
+      const result = await getUserData(makeProps(ReplyFormat.image))
+      expect(result.status).toBe("success")
+      expectCustomFieldWrite("https://cdn.example.com/img.jpg")
+    })
+
+    test("file attachment with file format → returns success", async () => {
+      lastMessage.current = makeIncomingMessage({
+        text: null,
+        attachments: [{ fileType: "file", originPath: "/doc.pdf" }],
+      })
+      const result = await getUserData(makeProps(ReplyFormat.file))
+      expect(result.status).toBe("success")
+    })
+
+    test("attachment with text-based format → returns retry even with text", async () => {
+      lastMessage.current = makeIncomingMessage({
+        text: "user@example.com",
+        attachments: [{ fileType: "image", originPath: "/img.jpg" }],
+      })
+      const result = await getUserData(makeProps(ReplyFormat.email))
+      expect(result.status).toBe("retry")
+    })
+
+    test("non-image attachment with image format → returns retry even with text", async () => {
+      lastMessage.current = makeIncomingMessage({
+        text: "caption should not override unsupported attachment",
+        attachments: [{ fileType: "video", originPath: "/video.mp4" }],
+      })
+
+      const result = await getUserData(makeProps(ReplyFormat.image))
+
+      expect(result.status).toBe("retry")
+    })
+  })
+
+  describe("any input format", () => {
+    test("video attachment → returns success", async () => {
+      lastMessage.current = makeIncomingMessage({
+        attachments: [{ fileType: "video", originPath: "/video.mp4" }],
+      })
+
+      const result = await getUserData(makeProps(ReplyFormat.anyInput))
+
+      expect(result.status).toBe("success")
+      // The uploaded attachment is stored as a public URL, not the bare key.
+      expectCustomFieldWrite("https://cdn.example.com/video.mp4")
+    })
+
+    test("location message → returns success", async () => {
+      lastMessage.current = makeIncomingMessage({
+        contentType: "location",
+        contentAttributes: { latitude: 10.5, longitude: 106.75 },
+      })
+
+      const result = await getUserData(makeProps(ReplyFormat.anyInput))
+
+      expect(result.status).toBe("success")
+      expectCustomFieldWrite("10.5,106.75")
+    })
+
+    test("plain text → returns success", async () => {
+      lastMessage.current = makeIncomingMessage({ text: "hello bot" })
+
+      const result = await getUserData(makeProps(ReplyFormat.anyInput))
+
+      expect(result.status).toBe("success")
+      expectCustomFieldWrite("hello bot")
+    })
+
+    test("empty input → returns retry", async () => {
+      lastMessage.current = makeIncomingMessage()
+
+      const result = await getUserData(makeProps(ReplyFormat.anyInput))
+
+      expect(result.status).toBe("retry")
+      expect(contactCustomFieldSetValueByKey).not.toHaveBeenCalled()
+    })
+  })
+
+  describe("location format", () => {
+    test("location pin → returns success with lat,lng", async () => {
+      lastMessage.current = makeIncomingMessage({
+        contentType: "location",
+        text: "Received location",
+        contentAttributes: { latitude: 10.5, longitude: 106.75 },
+      })
+
+      const result = await getUserData(makeProps(ReplyFormat.location))
+
+      expect(result.status).toBe("success")
+      expectCustomFieldWrite("10.5,106.75")
+    })
+
+    test("typed coordinate pair → returns success", async () => {
+      lastMessage.current = makeIncomingMessage({
+        text: "10.5, 106.75",
+      })
+
+      const result = await getUserData(makeProps(ReplyFormat.location))
+
+      expect(result.status).toBe("success")
+      expectCustomFieldWrite("10.5,106.75")
+    })
+
+    test("plain text without coordinates → returns retry", async () => {
+      lastMessage.current = makeIncomingMessage({ text: "Received location" })
+
+      const result = await getUserData(makeProps(ReplyFormat.location))
+
+      expect(result.status).toBe("retry")
+      expect(contactCustomFieldSetValueByKey).not.toHaveBeenCalled()
+    })
+  })
+
+  describe("no message", () => {
+    test("no last message → returns retry", async () => {
+      lastMessage.current = null
+      const result = await getUserData(makeProps(ReplyFormat.email))
+      expect(result.status).toBe("retry")
+    })
+  })
+
+  test("rethrows typed message storage errors for worker retry", async () => {
+    repositoryError.current = new MessageShardUnavailableError("shard down")
+
+    await expect(getUserData(makeProps(ReplyFormat.email))).rejects.toBe(
+      repositoryError.current,
+    )
+    expect(challengeClearCalls()).toHaveLength(0)
+  })
+})
+
+describe("getUserData — attempt counter (Bug B fix)", () => {
+  beforeEach(() => {
+    chatQueueAdd.mockClear()
+    lastMessage.current = makeIncomingMessage({ text: "invalid-email" })
+  })
+
+  function getUpdatedAttempts(): number {
+    const update = challengeSetCalls()[0]?.[0]
+    expect(update?.challenge).toBeDefined()
+    return update?.challenge?.data.attempts ?? 0
+  }
+
+  test("increments attempts from 1 to 2 on first retry", async () => {
+    await getUserData(makeProps(ReplyFormat.email, {}, 1))
+    expect(getUpdatedAttempts()).toBe(2)
+  })
+
+  test("increments attempts from 2 to 3 on second retry", async () => {
+    await getUserData(makeProps(ReplyFormat.email, {}, 2))
+    expect(getUpdatedAttempts()).toBe(3)
+  })
+
+  test("re-prompts with retryMessage through the flow message path", async () => {
+    await getUserData(
+      makeProps(
+        ReplyFormat.email,
+        { retryMessage: "Please re-enter your email" },
+        1,
+      ),
+    )
+
+    expect(chatQueueAdd).toHaveBeenCalledWith(
+      "sendFlowMessage",
+      {
+        type: "sendFlowMessage",
+        data: expect.objectContaining({
+          conversationId: "conv-1",
+          contactInboxId: "ci-1",
+          flowId: "flow-1",
+          flowVersionId: "fv-1",
+          metadata: {
+            type: "broadcast",
+            broadcastId: "bc-1",
+            contactInboxId: "ci-1",
+          },
+          step: expect.objectContaining({
+            id: "step-1",
+            nodeId: "node-1",
+            stepType: "sendText",
+            text: "Please re-enter your email",
+            buttons: [],
+          }),
+        }),
+      },
+      { priority: 5 },
+    )
+  })
+
+  test("keeps the long-standing blank retry behavior for non-webview formats (sends the blank retry text unchanged)", async () => {
+    await getUserData(makeProps(ReplyFormat.email, { retryMessage: "" }, 1))
+
+    expect(chatQueueAdd).toHaveBeenCalledWith(
+      "sendFlowMessage",
+      {
+        type: "sendFlowMessage",
+        data: expect.objectContaining({
+          step: expect.objectContaining({
+            text: "",
+          }),
+        }),
+      },
+      { priority: 5 },
+    )
+  })
+
+  test("falls back to the step message on date retry so the picker prompt is re-sent with its button", async () => {
+    lastMessage.current = makeIncomingMessage({ text: "not a date" })
+    await getUserData(
+      makeProps(ReplyFormat.date, {
+        message: "Pick your date",
+        retryMessage: "  ",
+      }),
+    )
+
+    expect(chatQueueAdd).toHaveBeenCalledWith(
+      "sendChatMessage",
+      expect.objectContaining({
+        data: expect.objectContaining({
+          text: "Pick your date",
+          quickReplies: [expect.objectContaining({ buttonType: "url" })],
+        }),
+      }),
+    )
+  })
+})
+
+describe("getUserData — auto-skip", () => {
+  test("records timeout when skipping after auto-skip time elapses", async () => {
+    lastMessage.current = makeIncomingMessage({ text: "invalid" })
+    const result = await getUserData(
+      makeProps(
+        ReplyFormat.email,
+        {
+          autoSkip: true,
+          autoSkipFailAttempts: 3,
+          autoSkipTimeValue: 1,
+          autoSkipTimeUnit: "hours" as const,
+        },
+        1,
+        new Date(0),
+      ),
+    )
+
+    expect(result.status).toBe("skip")
+    expectLastInputFailureUpdate("timeout")
+  })
+
+  test("skips after exceeding max attempts", async () => {
+    lastMessage.current = makeIncomingMessage({ text: "invalid" })
+    const result = await getUserData(
+      makeProps(
+        ReplyFormat.email,
+        {
+          autoSkip: true,
+          autoSkipFailAttempts: 2,
+          autoSkipTimeValue: 24,
+          autoSkipTimeUnit: "hours" as const,
+        },
+        3,
+      ),
+    )
+    expect(result.status).toBe("skip")
+    expectLastInputFailureUpdate("invalid_input_attempts")
+  })
+
+  test("accepts JSON string timestamps when deciding timeout", async () => {
+    lastMessage.current = makeIncomingMessage({ text: "invalid" })
+    const result = await getUserData(
+      makeProps(
+        ReplyFormat.email,
+        {
+          autoSkip: true,
+          autoSkipFailAttempts: 3,
+          autoSkipTimeValue: 1,
+          autoSkipTimeUnit: "hours" as const,
+        },
+        1,
+        "2026-01-01T00:00:00.000Z",
+      ),
+    )
+
+    expect(result.status).toBe("skip")
+    expectLastInputFailureUpdate("timeout")
+  })
+})
+
+describe("getUserData — challenge lifecycle", () => {
+  test("clears challenge after successful input", async () => {
+    lastMessage.current = makeIncomingMessage({ text: "user@example.com" })
+
+    const result = await getUserData(makeProps(ReplyFormat.email))
+
+    expect(result.status).toBe("success")
+    expect(challengeClearCalls()).toHaveLength(1)
+  })
+
+  test("clears challenge after auto-skip", async () => {
+    lastMessage.current = makeIncomingMessage({ text: "invalid" })
+
+    const result = await getUserData(
+      makeProps(
+        ReplyFormat.email,
+        {
+          autoSkip: true,
+          autoSkipFailAttempts: 1,
+          autoSkipTimeValue: 24,
+          autoSkipTimeUnit: "hours" as const,
+        },
+        1,
+      ),
+    )
+
+    expect(result.status).toBe("skip")
+    expect(challengeClearCalls()).toHaveLength(1)
+  })
+
+  test("keeps challenge while retrying invalid input", async () => {
+    lastMessage.current = makeIncomingMessage({ text: "invalid" })
+
+    const result = await getUserData(makeProps(ReplyFormat.email))
+
+    expect(result.status).toBe("retry")
+    expect(challengeClearCalls()).toHaveLength(0)
+  })
+
+  test("clears challenge after terminal non-storage errors", async () => {
+    repositoryError.current = new Error("repository failed")
+
+    const result = await getUserData(makeProps(ReplyFormat.email))
+
+    expect(result.status).toBe("error")
+    expect(challengeClearCalls()).toHaveLength(1)
+  })
+
+  test("clears challenge after first prompt enqueue failure", async () => {
+    chatQueueAdd.mockRejectedValueOnce(new Error("queue down"))
+    const props = makeProps(ReplyFormat.email)
+    props.ctx = { variables: { conversation: {} } }
+
+    const result = await getUserData(props)
+
+    expect(result.status).toBe("error")
+    expect(challengeSetCalls()).toHaveLength(1)
+    expect(challengeClearCalls()).toHaveLength(1)
+  })
+})
+
+describe("getUserData — first send (no challenge state)", () => {
+  beforeEach(() => {
+    chatQueueAdd.mockClear()
+    waitForChatJobCompletion.mockClear()
+  })
+
+  test("sends message and returns wait when no challenge active", async () => {
+    const props = makeProps(ReplyFormat.email, {
+      message: "Please enter your email, {{contact.name}}",
+    })
+    props.ctx = { variables: { conversation: {} } }
+    const result = await getUserData(props)
+    expect(result.status).toBe("wait")
+    expect(chatQueueAdd).toHaveBeenCalledWith(
+      "sendFlowMessage",
+      {
+        type: "sendFlowMessage",
+        data: {
+          conversationId: "conv-1",
+          contactInboxId: "ci-1",
+          flowId: "flow-1",
+          flowVersionId: "fv-1",
+          step: {
+            id: "step-1",
+            nodeId: "node-1",
+            stepType: "sendText",
+            text: "Please enter your email, {{contact.name}}",
+            buttons: [],
+          },
+          metadata: {
+            type: "broadcast",
+            broadcastId: "bc-1",
+            contactInboxId: "ci-1",
+          },
+        },
+      },
+      { priority: 5 },
+    )
+    expect(challengeClearCalls()).toHaveLength(0)
+  })
+
+  test("writes challenge state through the business layer before the first prompt", async () => {
+    const props = makeProps(ReplyFormat.email)
+    props.ctx = { variables: { conversation: {} } }
+
+    await getUserData(props)
+
+    expect(conversationUpdateChallenge).toHaveBeenCalledWith({
+      workspaceId: "ws-1",
+      conversationId: "conv-1",
+      challenge: {
+        type: "step",
+        data: {
+          flowId: "flow-1",
+          flowVersionId: "fv-1",
+          nodeId: "node-1",
+          stepId: "step-1",
+          attempts: 1,
+          lastAttemptAt: expect.any(Date),
+          challengeId: "test-id",
+        },
+      },
+    })
+  })
+
+  test("uses the latest flow version marker in both challenge and job", async () => {
+    const props = makeProps(ReplyFormat.email)
+    props.ctx = { variables: { conversation: {} } }
+    props.useLatestFlowVersion = true
+
+    await getUserData(props)
+
+    const [, job] = chatQueueAdd.mock.calls[0]
+    expect(job.data.flowVersionId).toBeUndefined()
+    expect(
+      challengeSetCalls()[0]?.[0].challenge?.data.flowVersionId,
+    ).toBeUndefined()
+  })
+
+  test("writes appointmentId into challenge state and the first prompt job", async () => {
+    const props = makeProps(ReplyFormat.email)
+    props.ctx = { variables: { conversation: {} } }
+    props.appointmentId = "appointment-1"
+
+    await getUserData(props)
+
+    const [, job] = chatQueueAdd.mock.calls[0]
+    expect(job.data.appointmentId).toBe("appointment-1")
+    expect(challengeSetCalls()[0]?.[0].challenge?.data.appointmentId).toBe(
+      "appointment-1",
+    )
+  })
+
+  test("still uses sendFlowMessage when there is no broadcast metadata", async () => {
+    const props = makeProps(ReplyFormat.email)
+    props.ctx = { variables: { conversation: {} } }
+    props.metadata = undefined
+
+    await getUserData(props)
+
+    const [action, job] = chatQueueAdd.mock.calls[0]
+    expect(action).toBe("sendFlowMessage")
+    expect(job.data.metadata).toBeUndefined()
+  })
+
+  test("writes challenge state before waiting for prompt delivery", async () => {
+    const order: string[] = []
+    const fakeJob = { waitUntilFinished: vi.fn() }
+    conversationUpdateChallenge.mockImplementationOnce(() => {
+      order.push("state")
+      return Promise.resolve()
+    })
+    chatQueueAdd.mockImplementationOnce(() => {
+      order.push("enqueue")
+      return Promise.resolve(fakeJob)
+    })
+    waitForChatJobCompletion.mockImplementationOnce(() => {
+      order.push("wait")
+      return Promise.resolve()
+    })
+
+    const props = makeProps(ReplyFormat.email)
+    props.ctx = { variables: { conversation: {} } }
+    const result = await getUserData(props)
+
+    expect(result.status).toBe("wait")
+    expect(order).toEqual(["state", "enqueue", "wait"])
+    expect(waitForChatJobCompletion).toHaveBeenCalledWith(fakeJob, {
+      conversationId: "conv-1",
+      stepId: "step-1",
+    })
+  })
+
+  test("does not return wait until prompt delivery wait completes", async () => {
+    let releaseWait!: () => void
+    const waitPromise = new Promise<void>((resolve) => {
+      releaseWait = resolve
+    })
+    chatQueueAdd.mockResolvedValueOnce({ waitUntilFinished: vi.fn() })
+    waitForChatJobCompletion.mockReturnValueOnce(waitPromise)
+
+    const props = makeProps(ReplyFormat.email)
+    props.ctx = { variables: { conversation: {} } }
+    let resolved = false
+    const resultPromise = getUserData(props).then((result) => {
+      resolved = true
+      return result
+    })
+
+    await Promise.resolve()
+    await Promise.resolve()
+    expect(resolved).toBe(false)
+
+    releaseWait()
+    await expect(resultPromise).resolves.toMatchObject({ status: "wait" })
+  })
+})
+
+// The prompt is this step's outgoing message, so it has to carry the run's
+// comment anchor like any other message-producing step. Dropping it meant a
+// question-first flow never claimed the single comment_id-anchored DM Meta
+// grants per comment, and a question after a `sendText` reached the channel
+// with no anchor — so `assertCommentPrivateReplyFollowUpDeliverable` never ran
+// and a closed 24-hour window surfaced as an opaque Send API rejection.
+describe("getUserData — comment-triggered private reply", () => {
+  beforeEach(() => {
+    chatQueueAdd.mockClear()
+  })
+
+  function promptJobData() {
+    return findChatJobCall("sendFlowMessage").data as {
+      commentAnchor?: unknown
+    }
+  }
+
+  test("forwards an unspent anchor, so the channel can send the prompt comment-anchored", async () => {
+    const props = makeProps(ReplyFormat.email)
+    props.ctx = { variables: { conversation: {} } }
+    props.commentAnchor = {
+      commentId: "comment-1",
+      replyChannel: "private",
+    }
+
+    await getUserData(props)
+
+    expect(promptJobData().commentAnchor).toEqual({
+      commentId: "comment-1",
+      replyChannel: "private",
+    })
+  })
+
+  test("forwards a spent anchor too, so the follow-up guard can explain a closed window", async () => {
+    const props = makeProps(ReplyFormat.email)
+    props.ctx = { variables: { conversation: {} } }
+    props.commentAnchor = {
+      commentId: "comment-1",
+      replyChannel: "private",
+      spent: true,
+    }
+
+    await getUserData(props)
+
+    expect(promptJobData().commentAnchor).toEqual({
+      commentId: "comment-1",
+      replyChannel: "private",
+      spent: true,
+    })
+  })
+
+  test("forwards a public anchor, so the prompt posts as a comment reply", async () => {
+    const props = makeProps(ReplyFormat.email)
+    props.ctx = { variables: { conversation: {} } }
+    props.commentAnchor = {
+      commentId: "comment-1",
+      replyChannel: "public",
+    }
+
+    await getUserData(props)
+
+    expect(promptJobData().commentAnchor).toEqual({
+      commentId: "comment-1",
+      replyChannel: "public",
+    })
+  })
+
+  test("sends no commentAnchor key when the run did not start from a comment", async () => {
+    const props = makeProps(ReplyFormat.email)
+    props.ctx = { variables: { conversation: {} } }
+
+    await getUserData(props)
+
+    expect(Object.hasOwn(promptJobData(), "commentAnchor")).toBe(false)
+  })
+})
+
+function findChatJobCall(action: string) {
+  const call = chatQueueAdd.mock.calls.find(
+    ([callAction]) => callAction === action,
+  )
+  if (!call) {
+    throw new Error(
+      `expected chatQueue.add to have been called with "${action}"`,
+    )
+  }
+  return call[1] as {
+    type: string
+    data: {
+      text?: string
+      quickReplies?: {
+        id: string
+        label: string
+        buttonType: string
+        url?: string
+        messengerExtensions?: boolean
+        postback?: string
+      }[]
+    }
+  }
+}
+
+describe("getUserData — date/datetime webview prompt (RF09/RF10)", () => {
+  beforeEach(() => {
+    chatQueueAdd.mockClear()
+  })
+
+  test("date replyFormat sends a url quick reply with the English label by default", async () => {
+    const props = makeProps(ReplyFormat.date)
+    props.ctx = { variables: { conversation: {} } }
+    workspaceFindById.mockResolvedValueOnce({ language: "en" })
+
+    const result = await getUserData(props)
+
+    expect(result.status).toBe("wait")
+    const job = findChatJobCall("sendChatMessage")
+    expect(job.data.quickReplies).toEqual([
+      {
+        id: "test-id",
+        label: "Select Date",
+        buttonType: "url",
+        url: expect.stringContaining("/extensions/datetime-picker"),
+        messengerExtensions: true,
+      },
+    ])
+  })
+
+  test("keeps an initial broadcast date prompt in bulk delivery", async () => {
+    const props = makeProps(ReplyFormat.date)
+    props.isBulkBroadcast = true
+
+    await getUserData(props)
+
+    expect(findChatJobCall("sendChatMessage").data).toMatchObject({
+      isBulkBroadcast: true,
+    })
+  })
+
+  test("uses the Vietnamese label when workspace.language is vi", async () => {
+    workspaceFindById.mockResolvedValueOnce({ language: "vi" })
+    const props = makeProps(ReplyFormat.datetime)
+    props.ctx = { variables: { conversation: {} } }
+
+    await getUserData(props)
+
+    const job = findChatJobCall("sendChatMessage")
+    expect(job.data.quickReplies?.[0]?.label).toBe("Chọn ngày")
+  })
+
+  test("signs a webview token that verifies and carries the challengeId written to the challenge", async () => {
+    const props = makeProps(ReplyFormat.date)
+    props.ctx = { variables: { conversation: {} } }
+
+    await getUserData(props)
+
+    const job = findChatJobCall("sendChatMessage")
+    const url = new URL(job.data.quickReplies?.[0]?.url ?? "")
+    const token = url.searchParams.get("token")
+    expect(token).toBeTruthy()
+
+    const payload = await verifyUserDataWebviewToken(token as string)
+    expect(payload).toMatchObject({
+      workspaceId: "ws-1",
+      conversationId: "conv-1",
+      contactInboxId: "ci-1",
+      contactId: "contact-1",
+      channel: "messenger",
+      flowId: "flow-1",
+      flowVersionId: "fv-1",
+      stepId: "step-1",
+      nodeId: "node-1",
+      outputFieldId: "field-1",
+      replyFormat: "date",
+    })
+
+    const challengeCall = conversationUpdateChallenge.mock.calls[0]?.[0]
+    expect(payload.challengeId).toBe(challengeCall?.challenge?.data.challengeId)
+  })
+
+  test("writes the challenge state (with challengeId) before the webview prompt", async () => {
+    const props = makeProps(ReplyFormat.datetime)
+    props.ctx = { variables: { conversation: {} } }
+
+    await getUserData(props)
+
+    expect(conversationUpdateChallenge).toHaveBeenCalledWith({
+      workspaceId: "ws-1",
+      conversationId: "conv-1",
+      challenge: {
+        type: "step",
+        data: expect.objectContaining({
+          stepId: "step-1",
+          challengeId: "test-id",
+        }),
+      },
+    })
+  })
+
+  test("does not use the text-prompt (sendFlowMessage) path for date/datetime", async () => {
+    const props = makeProps(ReplyFormat.date)
+    props.ctx = { variables: { conversation: {} } }
+
+    await getUserData(props)
+
+    expect(chatQueueAdd).not.toHaveBeenCalledWith(
+      "sendFlowMessage",
+      expect.anything(),
+    )
+  })
+
+  test("reuses the existing challengeId from the conversation's current challenge on retry", async () => {
+    lastMessage.current = makeIncomingMessage({ text: "not-a-date" })
+    const props = makeProps(ReplyFormat.date, {}, 1)
+    props.conversation = {
+      ...props.conversation,
+      additionalAttributes: {
+        challenge: {
+          type: "step",
+          data: {
+            flowId: "flow-1",
+            flowVersionId: "fv-1",
+            nodeId: "node-1",
+            stepId: "step-1",
+            attempts: 1,
+            lastAttemptAt: new Date(),
+            challengeId: "existing-challenge-id",
+          },
+        },
+      },
+    }
+
+    await getUserData(props)
+
+    const challengeCall = conversationUpdateChallenge.mock.calls[0]?.[0]
+    expect(challengeCall?.challenge?.data.challengeId).toBe(
+      "existing-challenge-id",
+    )
+
+    const job = findChatJobCall("sendChatMessage")
+    const url = new URL(job.data.quickReplies?.[0]?.url ?? "")
+    const token = url.searchParams.get("token") as string
+    const payload = await verifyUserDataWebviewToken(token)
+    expect(payload.challengeId).toBe("existing-challenge-id")
+  })
+})
+
+describe("getUserData — webview submission (RF09/RF10)", () => {
+  beforeEach(() => {
+    chatQueueAdd.mockClear()
+  })
+
+  function makeWebviewSubmissionProps(challengeId = "test-id") {
+    const props = makeProps(ReplyFormat.date)
+    props.metadata = {
+      type: GET_USER_DATA_WEBVIEW_SELECTION_PAYLOAD_TYPE,
+      stepId: "step-1",
+      challengeId,
+      selectedValue: "2026-08-21T00:00:00.000Z",
+    }
+    return props
+  }
+
+  test("claims the challenge and saves the selected value on success", async () => {
+    conversationConsumeChallenge.mockResolvedValueOnce(true)
+    const props = makeWebviewSubmissionProps()
+
+    const result = await getUserData(props)
+
+    expect(conversationConsumeChallenge).toHaveBeenCalledWith({
+      workspaceId: "ws-1",
+      conversationId: "conv-1",
+      stepId: "step-1",
+      challengeId: "test-id",
+    })
+    expect(result).toEqual({
+      result: "2026-08-21T00:00:00.000Z",
+      status: "success",
+    })
+    expectCustomFieldWrite("2026-08-21T00:00:00.000Z")
+    expectLastInputFailureUpdate(null)
+    // consumeChallenge already cleared the challenge atomically — the
+    // handler must not issue a separate updateChallenge(undefined) clear.
+    expect(challengeClearCalls()).toHaveLength(0)
+  })
+
+  test("duplicate submission (challenge already consumed) is a no-op", async () => {
+    conversationConsumeChallenge.mockResolvedValueOnce(false)
+    const props = makeWebviewSubmissionProps()
+
+    const result = await getUserData(props)
+
+    expect(result).toEqual({ result: undefined, status: "wait" })
+    expect(contactCustomFieldSetValueByKey).not.toHaveBeenCalled()
+    expect(contactInboxUpdateTracking).not.toHaveBeenCalled()
+  })
+
+  test("stale challengeId from a previous challenge cycle is a no-op", async () => {
+    conversationConsumeChallenge.mockResolvedValueOnce(false)
+    const props = makeWebviewSubmissionProps("stale-challenge-id")
+
+    const result = await getUserData(props)
+
+    expect(conversationConsumeChallenge).toHaveBeenCalledWith(
+      expect.objectContaining({ challengeId: "stale-challenge-id" }),
+    )
+    expect(result.status).toBe("wait")
+    expect(contactCustomFieldSetValueByKey).not.toHaveBeenCalled()
+  })
+
+  test("metadata for a different step falls through to the normal flow instead of claiming", async () => {
+    const props = makeWebviewSubmissionProps()
+    props.metadata = { ...props.metadata, stepId: "other-step" }
+    props.ctx = { variables: { conversation: {} } }
+
+    await getUserData(props)
+
+    expect(conversationConsumeChallenge).not.toHaveBeenCalled()
+  })
+})
+
+describe("getUserData — webview submission side-effect failure (crash-safety, Fix 1)", () => {
+  function makeWebviewSubmissionProps(challengeId = "test-id") {
+    const props = makeProps(ReplyFormat.date)
+    props.metadata = {
+      type: GET_USER_DATA_WEBVIEW_SELECTION_PAYLOAD_TYPE,
+      stepId: "step-1",
+      challengeId,
+      selectedValue: "2026-08-21T00:00:00.000Z",
+    }
+    return props
+  }
+
+  test("restores the challenge (same challengeId) and returns error status when a side effect fails after the claim", async () => {
+    conversationConsumeChallenge.mockResolvedValueOnce(true)
+    contactCustomFieldSetValueByKey.mockRejectedValueOnce(
+      new Error("field write failed"),
+    )
+    const props = makeWebviewSubmissionProps("test-id")
+
+    const result = await getUserData(props)
+
+    // No unhandled rejection: the promise resolves with an "error" result
+    // rather than throwing.
+    expect(result.status).toBe("error")
+    expect(result.result).toBeUndefined()
+
+    // Restored with the SAME challengeId that was just claimed, so the
+    // contact's existing webview link/token can resubmit successfully. The
+    // restore must go through the conditional restoreChallengeIfAbsent (a
+    // plain updateChallenge could overwrite a newer challenge started
+    // between the claim and the restore).
+    expect(conversationRestoreChallengeIfAbsent).toHaveBeenCalledTimes(1)
+    expect(
+      conversationRestoreChallengeIfAbsent.mock.calls[0]?.[0],
+    ).toMatchObject({
+      workspaceId: "ws-1",
+      conversationId: "conv-1",
+      challenge: {
+        type: "step",
+        data: expect.objectContaining({
+          stepId: "step-1",
+          challengeId: "test-id",
+        }),
+      },
+    })
+    expect(conversationUpdateChallenge).not.toHaveBeenCalled()
+
+    // getUserData's outer catch must NOT also unconditionally clear the
+    // challenge — that would erase the restore above and strand the contact.
+    expect(challengeClearCalls()).toHaveLength(0)
+  })
+
+  test("restores the challenge when updateTracking itself fails (not just the custom-field write)", async () => {
+    conversationConsumeChallenge.mockResolvedValueOnce(true)
+    contactInboxUpdateTracking.mockRejectedValueOnce(
+      new Error("tracking failed"),
+    )
+    const props = makeWebviewSubmissionProps("test-id")
+
+    const result = await getUserData(props)
+
+    expect(result.status).toBe("error")
+    expect(conversationRestoreChallengeIfAbsent).toHaveBeenCalledTimes(1)
+  })
+
+  test("tolerates a skipped restore (a newer challenge already exists) and still returns error", async () => {
+    conversationConsumeChallenge.mockResolvedValueOnce(true)
+    contactCustomFieldSetValueByKey.mockRejectedValueOnce(
+      new Error("field write failed"),
+    )
+    conversationRestoreChallengeIfAbsent.mockResolvedValueOnce(false)
+    const props = makeWebviewSubmissionProps("test-id")
+
+    const result = await getUserData(props)
+
+    expect(result.status).toBe("error")
+    // The newer challenge must be left untouched — no unconditional write.
+    expect(conversationUpdateChallenge).not.toHaveBeenCalled()
+  })
+})
+
+describe("getUserData — challenge claim race, manual reply vs webview submit (Fix 2)", () => {
+  beforeEach(() => {
+    lastMessage.current = makeIncomingMessage({ text: "user@example.com" })
+  })
+
+  function withChallengeId(
+    props: ExecuteStepProps<GetUserDataStepSchema>,
+    challengeId: string,
+  ): ExecuteStepProps<GetUserDataStepSchema> {
+    const existing = (
+      props.conversation.additionalAttributes as
+        | ConversationAttributes
+        | undefined
+    )?.challenge
+    props.conversation = {
+      ...props.conversation,
+      additionalAttributes: {
+        challenge: {
+          type: "step",
+          data: { ...existing?.data, challengeId },
+        },
+      },
+    }
+    return props
+  }
+
+  test("calls consumeChallenge (not clearChallenge) when the current challenge carries a challengeId", async () => {
+    conversationConsumeChallenge.mockResolvedValueOnce(true)
+    const props = withChallengeId(makeProps(ReplyFormat.email), "challenge-xyz")
+
+    const result = await getUserData(props)
+
+    expect(conversationConsumeChallenge).toHaveBeenCalledWith({
+      workspaceId: "ws-1",
+      conversationId: "conv-1",
+      stepId: "step-1",
+      challengeId: "challenge-xyz",
+    })
+    expect(challengeClearCalls()).toHaveLength(0)
+    expect(result.status).toBe("success")
+  })
+
+  test("loses the claim race to a concurrent webview submit → wait, not success", async () => {
+    conversationConsumeChallenge.mockResolvedValueOnce(false)
+    const props = withChallengeId(makeProps(ReplyFormat.email), "challenge-xyz")
+
+    const result = await getUserData(props)
+
+    expect(result.status).toBe("wait")
+  })
+
+  test("legacy challenge (no challengeId) still uses the old unconditional clearChallenge — success (regression)", async () => {
+    // makeProps' default fixture already carries a legacy (no challengeId)
+    // challenge.
+    const props = makeProps(ReplyFormat.email)
+
+    const result = await getUserData(props)
+
+    expect(conversationConsumeChallenge).not.toHaveBeenCalled()
+    expect(challengeClearCalls()).toHaveLength(1)
+    expect(result.status).toBe("success")
+  })
+})
+
+describe("getUserData — autoSkip challenge claim race (Fix 2)", () => {
+  function autoSkipProps(
+    challengeId?: string,
+  ): ExecuteStepProps<GetUserDataStepSchema> {
+    lastMessage.current = makeIncomingMessage({ text: "invalid" })
+    const props = makeProps(
+      ReplyFormat.email,
+      {
+        autoSkip: true,
+        autoSkipFailAttempts: 1,
+        autoSkipTimeValue: 24,
+        autoSkipTimeUnit: "hours" as const,
+      },
+      1,
+    )
+    if (!challengeId) {
+      return props
+    }
+    const existing = (
+      props.conversation.additionalAttributes as
+        | ConversationAttributes
+        | undefined
+    )?.challenge
+    props.conversation = {
+      ...props.conversation,
+      additionalAttributes: {
+        challenge: {
+          type: "step",
+          data: { ...existing?.data, challengeId },
+        },
+      },
+    }
+    return props
+  }
+
+  test("claim wins → skip (regression)", async () => {
+    conversationConsumeChallenge.mockResolvedValueOnce(true)
+    const props = autoSkipProps("challenge-abc")
+
+    const result = await getUserData(props)
+
+    expect(result.status).toBe("skip")
+  })
+
+  test("claim lost to a concurrent terminator → wait instead of skip", async () => {
+    conversationConsumeChallenge.mockResolvedValueOnce(false)
+    const props = autoSkipProps("challenge-abc")
+
+    const result = await getUserData(props)
+
+    expect(result.status).toBe("wait")
+  })
+})
+
+describe("getUserData — date/datetime webview channel gating (Fix 3)", () => {
+  beforeEach(() => {
+    chatQueueAdd.mockClear()
+  })
+
+  test("whatsapp is not URL-quick-reply capable — falls through to the plain-text prompt", async () => {
+    const props = makeProps(ReplyFormat.date)
+    props.ctx = { variables: { conversation: {} } }
+    props.contactInbox = { ...props.contactInbox, channel: "whatsapp" }
+
+    const result = await getUserData(props)
+
+    expect(result.status).toBe("wait")
+    expect(chatQueueAdd).toHaveBeenCalledWith(
+      "sendFlowMessage",
+      expect.objectContaining({ type: "sendFlowMessage" }),
+      { priority: 5 },
+    )
+    expect(chatQueueAdd).not.toHaveBeenCalledWith(
+      "sendChatMessage",
+      expect.anything(),
+    )
+  })
+
+  test("messenger is URL-quick-reply capable — still gets the url quick reply (regression)", async () => {
+    const props = makeProps(ReplyFormat.date)
+    props.ctx = { variables: { conversation: {} } }
+    props.contactInbox = { ...props.contactInbox, channel: "messenger" }
+
+    await getUserData(props)
+
+    const job = findChatJobCall("sendChatMessage")
+    expect(job.data.quickReplies?.[0]?.buttonType).toBe("url")
+  })
+})
+
+describe("getUserData — non-date replyFormats keep the text prompt path (regression)", () => {
+  beforeEach(() => {
+    chatQueueAdd.mockClear()
+  })
+
+  test("text replyFormat still enqueues via enqueueFlowStepMessage / sendFlowMessage", async () => {
+    const props = makeProps(ReplyFormat.text)
+    props.ctx = { variables: { conversation: {} } }
+
+    const result = await getUserData(props)
+
+    expect(result.status).toBe("wait")
+    expect(chatQueueAdd).toHaveBeenCalledWith(
+      "sendFlowMessage",
+      expect.objectContaining({ type: "sendFlowMessage" }),
+      { priority: 5 },
+    )
+    expect(chatQueueAdd).not.toHaveBeenCalledWith(
+      "sendChatMessage",
+      expect.anything(),
+    )
+  })
+})
+
+describe("getUserData — WhatsApp native location request (RF08)", () => {
+  beforeEach(() => {
+    chatQueueAdd.mockClear()
+  })
+
+  test("whatsapp location format sends the reserved native location-request marker", async () => {
+    const props = makeProps(ReplyFormat.location, {
+      message: "Please share your location",
+    })
+    props.ctx = { variables: { conversation: {} } }
+    props.contactInbox = { ...props.contactInbox, channel: "whatsapp" }
+
+    const result = await getUserData(props)
+
+    expect(result.status).toBe("wait")
+    const job = findChatJobCall("sendChatMessage")
+    expect(job.data).toMatchObject({
+      text: "Please share your location",
+      quickReplies: [
+        {
+          id: "whatsapp:native:location_request",
+          label: "Send location",
+          buttonType: "postback",
+          postback: "whatsapp:native:location_request",
+        },
+      ],
+    })
+    expect(chatQueueAdd).not.toHaveBeenCalledWith(
+      "sendFlowMessage",
+      expect.anything(),
+    )
+    expect(waitForChatJobCompletion).toHaveBeenCalledWith(
+      expect.objectContaining({ id: "job-1" }),
+      { conversationId: "conv-1", stepId: "step-1" },
+    )
+  })
+
+  test("uses the Vietnamese inbox label when workspace.language is vi", async () => {
+    workspaceFindById.mockResolvedValueOnce({ language: "vi" })
+    const props = makeProps(ReplyFormat.location)
+    props.ctx = { variables: { conversation: {} } }
+    props.contactInbox = { ...props.contactInbox, channel: "whatsapp" }
+
+    await getUserData(props)
+
+    const job = findChatJobCall("sendChatMessage")
+    expect(job.data.quickReplies?.[0]?.label).toBe("Gửi vị trí")
+  })
+
+  test("non-whatsapp location format keeps the text prompt path", async () => {
+    const props = makeProps(ReplyFormat.location)
+    props.ctx = { variables: { conversation: {} } }
+    props.contactInbox = { ...props.contactInbox, channel: "messenger" }
+
+    const result = await getUserData(props)
+
+    expect(result.status).toBe("wait")
+    expect(chatQueueAdd).toHaveBeenCalledWith(
+      "sendFlowMessage",
+      expect.objectContaining({ type: "sendFlowMessage" }),
+      { priority: 5 },
+    )
+    expect(chatQueueAdd).not.toHaveBeenCalledWith(
+      "sendChatMessage",
+      expect.anything(),
+    )
+  })
+})
