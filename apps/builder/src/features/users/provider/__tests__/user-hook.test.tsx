@@ -95,7 +95,7 @@ describe("user query hooks", () => {
     queryClient.clear()
   })
 
-  test("requests workspace members and inbox teams with unpaginated inputs", async () => {
+  test("requests workspace members while Community team endpoints stay disabled", async () => {
     act(() => {
       root.render(
         <QueryClientProvider client={queryClient}>
@@ -106,7 +106,7 @@ describe("user query hooks", () => {
 
     await vi.waitFor(() => {
       expect(mockListWorkspaceMembers).toHaveBeenCalledTimes(1)
-      expect(mockListInboxTeams).toHaveBeenCalledTimes(1)
+      expect(mockListInboxTeams).not.toHaveBeenCalled()
     })
     expect(mockListWorkspaceMembers).toHaveBeenCalledWith(
       {
@@ -115,15 +115,9 @@ describe("user query hooks", () => {
       },
       expect.anything(),
     )
-    expect(mockListInboxTeams).toHaveBeenCalledWith(
-      {
-        workspaceId: "workspace-1",
-      },
-      expect.anything(),
-    )
   })
 
-  test("unwraps workspace member and inbox team response data", async () => {
+  test("unwraps workspace members and returns empty Community inbox teams", async () => {
     const workspaceMembers = [{ id: "member-1" }]
     const inboxTeams = [{ id: "team-1" }]
     let data: { inboxTeams: unknown; workspaceMembers: unknown } | undefined
@@ -142,7 +136,7 @@ describe("user query hooks", () => {
     })
 
     await vi.waitFor(() => {
-      expect(data).toEqual({ workspaceMembers, inboxTeams })
+      expect(data).toEqual({ workspaceMembers, inboxTeams: [] })
     })
   })
 
@@ -204,7 +198,7 @@ describe("user query hooks", () => {
     expect(state?.inboxTeamsIsError).toBe(false)
   })
 
-  test("invalidates both user-backed lists, and a refetch returns fresh data", async () => {
+  test("invalidates members only and keeps unavailable team data empty", async () => {
     let invalidate: (() => unknown) | null = null
     let data: { inboxTeams: unknown; workspaceMembers: unknown } | undefined
     const invalidateQueries = vi.spyOn(queryClient, "invalidateQueries")
@@ -236,11 +230,11 @@ describe("user query hooks", () => {
       await invalidate?.()
     })
 
-    expect(invalidateQueries).toHaveBeenCalledTimes(2)
+    expect(invalidateQueries).toHaveBeenCalledTimes(1)
     await vi.waitFor(() => {
       expect(data).toEqual({
         workspaceMembers: refreshedMembers,
-        inboxTeams: refreshedTeams,
+        inboxTeams: [],
       })
     })
   })

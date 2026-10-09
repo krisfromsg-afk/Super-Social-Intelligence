@@ -22,9 +22,16 @@ export const useWorkspaceMembers = (
 export const useInboxTeams = (
   _workspaceId: string | undefined,
   _options?: { enabled?: boolean },
-): { data: Array<{ id: string; name: string }>; isPending: boolean } => ({
+): {
+  data: Array<{ id: string; name: string }>
+  isPending: boolean
+  isError: boolean
+  error: null
+} => ({
   data: [],
   isPending: false,
+  isError: false,
+  error: null,
 })
 
 export const useInvalidateUsers = () => {

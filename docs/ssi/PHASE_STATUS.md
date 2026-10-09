@@ -6,8 +6,8 @@ Updated 2026-10-09.
 |---|---|---|
 | 00A: initialize repo/feature branch | DONE | GitHub branch `feat/ssi-foundation-rebrand` |
 | 00B: product and licensing plan | DONE | This branch: MASTER_PLAN, RAG_ARCHITECTURE, UPSTREAM_POLICY |
-| 00C: pinned Community source import | NOT YET VERIFIED | `.github/workflows/import-community.yml` must run successfully |
-| 00D: baseline build and licensing dependency repair | NOT STARTED | Run package, typecheck, lint, tests, build |
+| 00C: pinned Community source import | DONE | Actions run 37918099480: success; source import commit 508ece6610ed |
+| 00D: baseline build and licensing dependency repair | IN PROGRESS | Dependency install passed; Community import type errors being remediated |
 | 01: SSI rebrand | IN PROGRESS | Default product name, wordmark assets, web manifest, attribution |
 | 02: omnichannel inbox modernization | NOT STARTED | N/A |
 | 03: AI Personality Studio | NOT STARTED | N/A |
