@@ -1322,6 +1322,17 @@ class ConversationService extends BaseService {
       }
     }
     await this.invalidate({ workspaceId, ids })
+    // Persist first, then notify other open inboxes. Never publish inside an
+    // uncommitted transaction: consumers could otherwise see rolled-back state.
+    if (!props.tx && ids.length > 0) {
+      publishToWorkspaceParty(workspaceId, {
+        eventType: RealtimeEventType.conversationUpdated,
+        data: {
+          conversationIds: ids,
+          changes: { botEnabled, botResumeAt: botResumeAt?.toISOString() ?? null },
+        },
+      })
+    }
   }
 
   async updateFollowed(props: {

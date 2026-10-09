@@ -9,6 +9,7 @@ import { useWorkspaceRealtimeEvents } from "@/features/realtime/use-workspace-re
 import { useWorkspaceId } from "@/hooks/routing"
 import { createBoundedSeenSet } from "@/lib/bounded-seen-set"
 import { useConversationIdParam } from "../conversations/hooks/use-conversation-id-param"
+import { getSsiBotRealtimePatch } from "../ssi-inbox/bot-realtime-patch"
 import { outboundCallModeQueryKeys } from "../integration-whatsapp/calling/voip/outbound-call-mode-query-key"
 import { useWhatsappVoipCallStore } from "../integration-whatsapp/calling/voip/voip-call-store"
 import type { MessageResourceWithRelations } from "../messages/schema/resource"
@@ -255,16 +256,22 @@ export function ChatRealtime() {
     },
     conversationUpdated: (event) => {
       const { conversationIds, changes } = event.data
-      // This channel only advances read state. Cross-tab mark-unread (null) is
-      // intentionally unsupported, matching the existing behavior.
-      if (!changes.agentLastReadAt) {
-        return
+      // Bot ownership and temporary-pause deadline must travel together.
+      // The decoder ignores incomplete legacy events instead of accidentally
+      // turning a 24h pause into permanent Human Only in another tab.
+      const botPatch = getSsiBotRealtimePatch(changes)
+      if (botPatch) {
+        updateConversations(conversationIds, botPatch)
       }
-      const agentLastReadAt = new Date(changes.agentLastReadAt)
-      if (Number.isNaN(agentLastReadAt.getTime())) {
-        return
+
+      // This event also carries read-state updates. Cross-tab mark-unread
+      // (null) stays unsupported to preserve the existing newer-read guard.
+      if (changes.agentLastReadAt) {
+        const agentLastReadAt = new Date(changes.agentLastReadAt)
+        if (!Number.isNaN(agentLastReadAt.getTime())) {
+          applyAgentLastReadAt(conversationIds, agentLastReadAt)
+        }
       }
-      applyAgentLastReadAt(conversationIds, agentLastReadAt)
     },
   }
 

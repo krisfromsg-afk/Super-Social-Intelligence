@@ -39,6 +39,8 @@ jobs:
         run: pnpm --filter builder exec vitest run src/features/ssi-inbox/__tests__/message-provenance.test.ts
       - name: Verify permanent Human Only state
         run: pnpm --filter builder exec vitest run src/features/ssi-inbox/__tests__/human-only.test.ts
+      - name: Verify cross-tab bot handover events
+        run: pnpm --filter builder exec vitest run src/features/ssi-inbox/__tests__/bot-realtime-patch.test.ts
       - name: Check types (builder)
         run: pnpm --filter builder check-types
       - name: Build builder

@@ -278,6 +278,8 @@ export type RealtimeEventConversationUpdatedChanges = {
   followed?: boolean
   agentLastReadAt?: string | null
   botEnabled?: boolean
+  /** Required alongside botEnabled for a complete handover-state update. */
+  botResumeAt?: string | null
 }
 
 export type RealtimeEventConversationUpdated = {
