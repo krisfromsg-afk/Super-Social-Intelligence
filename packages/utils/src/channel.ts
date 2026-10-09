@@ -1,0 +1,379 @@
+import { z } from "zod"
+
+/**
+ * The channels a workspace can talk to a contact through.
+ *
+ * See this package's README ("Exception: cross-cutting product enums") for why
+ * a product enum lives in a generic-utils package: `@chatbotx.io/flow-config`
+ * needs it without depending on `@chatbotx.io/database`. Before this move those
+ * tables had to fall back to `Record<string, ...>`, so a typo'd or renamed
+ * channel silently missed its entry instead of failing to compile.
+ *
+ * `@chatbotx.io/database/partials` re-exports this, so the many existing
+ * importers there keep working unchanged.
+ *
+ * Adding a value here cascades: grep for `Record<ChannelType` and fix every
+ * exhaustive map before assuming the build is green.
+ */
+export const channelTypes = z.enum([
+  "omnichannel",
+  "webchat",
+  "messenger",
+  "whatsapp",
+  "zalo",
+  "smtp",
+  "telegram",
+  "instagram",
+  "threads",
+  "tiktok",
+  "api",
+])
+
+export type ChannelType = z.infer<typeof channelTypes>
+
+/**
+ * Channels Meta ads attribution (CTWA/CTM/CTID) exists for — the subset of
+ * `channelTypes` with an ads conversion pipeline (referral capture →
+ * conversion rules → CAPI). Lives here for the same reason as `channelTypes`
+ * (see the comment above): `@chatbotx.io/database` (contact-filter queries),
+ * `@chatbotx.io/business` (ads-conversion channel maps), and the builder
+ * (analytics/filter schemas) all need the identical list, and the database
+ * layer cannot import from business. Each layer derives its own stricter
+ * type from this (e.g. business `AdsEligibleChannel` re-checks it against
+ * the DB `AdsConversionChannel` enum via `satisfies`).
+ *
+ * Adding a channel here cascades: every `satisfies Record<AdsEligibleChannel,
+ * ...>` map in `@chatbotx.io/business/ads-conversion/channel-fields` (and its
+ * consumers) fails to compile until the new channel is threaded through.
+ */
+export const adsEligibleChannelTypes = z.enum([
+  "whatsapp",
+  "messenger",
+  "instagram",
+])
+
+export type AdsEligibleChannelType = z.infer<typeof adsEligibleChannelTypes>
+
+/**
+ * The ads-eligible channels whose attribution keys on Meta's ad-referral
+ * webhook fields (`referral.ad_id` + `referral.source === "ADS"`) instead of
+ * a click id (`ctwa_clid`, WhatsApp-only).
+ */
+export const adReferralChannelTypes = z.enum(["messenger", "instagram"])
+
+export type AdReferralChannelType = z.infer<typeof adReferralChannelTypes>
+
+/**
+ * The legacy/DB-default ads-conversion channel: every `AdsConversionEvent`
+ * row created before Phase 2 generalization (messenger/instagram support)
+ * was implicitly WhatsApp, and the DB column still defaults to it. Callers
+ * that accept an optional `channel` and need "omitted = whatsapp" behavior
+ * (query filters, insert conflict-target selection, analytics schema
+ * defaults) fall back to this constant instead of a repeated `"whatsapp"`
+ * literal.
+ */
+export const DEFAULT_ADS_CONVERSION_CHANNEL: AdsEligibleChannelType = "whatsapp"
+
+/**
+ * Static, presentation-agnostic facts about a channel that the create picker
+ * and settings screens both need. This is the single source of truth for
+ * "which channels can a user create/manage and in what order" — it replaces
+ * what used to be separately hardcoded `ChannelType[]` literals in
+ * `inbox-select-card.tsx` and `settings/channels/layout.tsx`.
+ *
+ * Being a `Record<ChannelType, ...>`, adding a value to `channelTypes` forces
+ * a compile error here until an entry is added — the same exhaustiveness
+ * guarantee `INBOX_ICON_CONFIG` already relies on, so a new channel can never
+ * silently go missing from the picker or the settings accordion the way the
+ * old plain-array lists allowed.
+ *
+ * `order` is a deliberate product-priority order — whatsapp, messenger,
+ * instagram, tiktok, telegram, zalo, webchat, then smtp (Email), then api —
+ * rather than alphabetical or either legacy list's order: the create picker
+ * (`whatsapp, messenger, instagram, zalo, tiktok, telegram, webchat`) and the
+ * settings accordion (`whatsapp, messenger, instagram, zalo, telegram,
+ * tiktok, webchat, smtp`) already disagreed with each other before this
+ * registry existed. `omnichannel` (the non-connectable fallback) always
+ * sorts last.
+ */
+export type ChannelCapability = {
+  /** Shown as an option on the "create new channel" picker. */
+  creatable: boolean
+  /** Gets a row in the workspace settings channels accordion. */
+  manageable: boolean
+  /**
+   * Whether creating this channel requires a resolved platform credential
+   * first (OAuth-style channels). `false` for self-serve channels
+   * (telegram, webchat) that never gate on `platformCredentialService`.
+   */
+  requiresCredential: boolean
+  /** Relative display order in the picker and the settings accordion. */
+  order: number
+  /**
+   * Whether the channel carries voice calls — gates call-only navigation (the
+   * Calls page entry). Being part of this exhaustive record means a future
+   * calling channel fails to compile until it declares its answer here.
+   */
+  callable: boolean
+}
+
+export const CHANNEL_CAPABILITIES: Record<ChannelType, ChannelCapability> = {
+  whatsapp: {
+    creatable: true,
+    manageable: true,
+    requiresCredential: true,
+    order: 1,
+    callable: true,
+  },
+  messenger: {
+    creatable: true,
+    manageable: true,
+    requiresCredential: true,
+    order: 2,
+    callable: false,
+  },
+  instagram: {
+    creatable: true,
+    manageable: true,
+    requiresCredential: true,
+    order: 3,
+    callable: false,
+  },
+  threads: {
+    creatable: true,
+    manageable: true,
+    requiresCredential: true,
+    order: 4,
+    callable: false,
+  },
+  tiktok: {
+    creatable: true,
+    manageable: true,
+    requiresCredential: true,
+    order: 5,
+    callable: false,
+  },
+  telegram: {
+    creatable: true,
+    manageable: true,
+    requiresCredential: false,
+    order: 6,
+    callable: false,
+  },
+  zalo: {
+    creatable: true,
+    manageable: true,
+    requiresCredential: true,
+    order: 7,
+    callable: false,
+  },
+  webchat: {
+    creatable: true,
+    manageable: true,
+    requiresCredential: false,
+    order: 8,
+    callable: false,
+  },
+  smtp: {
+    creatable: false,
+    manageable: true,
+    requiresCredential: false,
+    order: 9,
+    callable: false,
+  },
+  api: {
+    creatable: true,
+    manageable: true,
+    requiresCredential: false,
+    order: 10,
+    callable: false,
+  },
+  // Not a real connectable channel — the fallback icon/label for unknown
+  // channel strings (see `InboxIcon`'s `isChannelType` guard). Never offered
+  // for creation and never given its own settings row.
+  omnichannel: {
+    creatable: false,
+    manageable: false,
+    requiresCredential: false,
+    order: 11,
+    callable: false,
+  },
+}
+
+/**
+ * Channels offered on the "create new channel" picker, in display order.
+ * Derived from `CHANNEL_CAPABILITIES` rather than hardcoded so a new channel
+ * type shows up here automatically once its capability entry is filled in.
+ */
+export const CREATABLE_CHANNELS: ChannelType[] = channelTypes.options
+  .filter((channel) => CHANNEL_CAPABILITIES[channel].creatable)
+  .sort((a, b) => CHANNEL_CAPABILITIES[a].order - CHANNEL_CAPABILITIES[b].order)
+
+/**
+ * Channels with a row in the workspace settings channels accordion, in
+ * display order. Still requires a matching `settings/channels/<channel>/page.tsx`
+ * route — a filesystem constraint this registry cannot remove — but a missing
+ * route now 404s loudly rather than the silent omission a hand-maintained
+ * array allowed.
+ */
+export const MANAGEABLE_CHANNELS: ChannelType[] = channelTypes.options
+  .filter((channel) => CHANNEL_CAPABILITIES[channel].manageable)
+  .sort((a, b) => CHANNEL_CAPABILITIES[a].order - CHANNEL_CAPABILITIES[b].order)
+
+/**
+ * Channels that can produce call history, in display order. Derived from
+ * CHANNEL_CAPABILITIES.callable rather than hardcoded so nothing outside that
+ * registry has to name a specific channel to answer "can this workspace ever
+ * have calls?".
+ */
+export const CALL_CAPABLE_CHANNELS: ChannelType[] = channelTypes.options
+  .filter((channel) => CHANNEL_CAPABILITIES[channel].callable)
+  .sort((a, b) => CHANNEL_CAPABILITIES[a].order - CHANNEL_CAPABILITIES[b].order)
+
+/**
+ * Channels that support Meta's WhatsApp/Messenger/Instagram "coexistence"
+ * mode (running alongside the native app; a `CoexistSyncRun` imports the
+ * existing contact/message history once). Subset of `channelTypes`.
+ *
+ * Lives here for the same reason as `channelTypes` (see the comment above):
+ * `packages/database/src/schema/coexist-sync-run.ts` derives its
+ * `coexistChannel` pgEnum from these exact values so the database type and
+ * this list can never drift, and `@chatbotx.io/business` needs the same list
+ * without adding a database dependency.
+ */
+export const coexistChannels = z.enum(["whatsapp", "messenger", "instagram"])
+
+export type CoexistChannel = z.infer<typeof coexistChannels>
+
+/**
+ * Same values as `coexistChannels.options`, exposed as a plain array for
+ * callers that want that shape directly (e.g. `pgEnum`'s second argument).
+ */
+export const COEXIST_CHANNELS = coexistChannels.options
+
+/** Whether a channel string is one of the coexist-eligible channels. */
+export const isCoexistChannel = (
+  channel: string | null | undefined,
+): channel is CoexistChannel =>
+  channel != null && (COEXIST_CHANNELS as readonly string[]).includes(channel)
+
+/**
+ * Channels that support the Automatic Customer Scan (walking a channel's
+ * conversation/follower list to import existing contacts that never
+ * messaged first). Subset of `channelTypes`.
+ *
+ * Lives here for the same reason as `channelTypes`/`coexistChannels` (see the
+ * comments above): `@chatbotx.io/business`'s scan channel registry and
+ * `packages/database`'s scan queries need the same list without adding a
+ * database dependency.
+ */
+export const contactScanChannels = z.enum(["messenger", "instagram"])
+
+export type ContactScanChannel = z.infer<typeof contactScanChannels>
+
+/**
+ * Same values as `contactScanChannels.options`, exposed as a plain array for
+ * callers that want that shape directly.
+ */
+export const CONTACT_SCAN_CHANNELS = contactScanChannels.options
+
+/** Whether a channel string is one of the contact-scan-eligible channels. */
+export const isContactScanChannel = (
+  channel: string | null | undefined,
+): channel is ContactScanChannel =>
+  channel != null &&
+  (CONTACT_SCAN_CHANNELS as readonly string[]).includes(channel)
+
+/**
+ * Channels that support conversation routing (thread control: another app
+ * such as Meta AI or a partner may own the thread while this app listens on
+ * standby). Subset of `channelTypes`.
+ *
+ * Lives here for the same reason as `channelTypes`/`coexistChannels` (see the
+ * comments above): the builder's routing view, the business service and the
+ * worker send gate all need the same list without adding a database
+ * dependency. A channel joins it once its adapter implements the routing
+ * handlers; shared code keys off this set, never a channel name.
+ */
+export const threadControlChannels = z.enum(["whatsapp", "messenger"])
+
+export type ThreadControlChannel = z.infer<typeof threadControlChannels>
+
+/**
+ * Same values as `threadControlChannels.options`, exposed as a plain array for
+ * callers that want that shape directly.
+ */
+export const THREAD_CONTROL_CHANNELS = threadControlChannels.options
+
+/** Whether a channel string is one of the routing-capable channels. */
+export const isThreadControlChannel = (
+  channel: string | null | undefined,
+): channel is ThreadControlChannel =>
+  channel != null &&
+  (THREAD_CONTROL_CHANNELS as readonly string[]).includes(channel)
+
+/**
+ * The rules of the AI hand-over automation (hand a conversation to the
+ * channel's AI agent and take it back) that differ per channel, as plain data:
+ * shared code looks a channel up here and never branches on its name. A channel
+ * joins by adding an entry (it must already be a thread-control channel) and by
+ * implementing the bulk thread-control handler in its adapter. Transport limits
+ * (batch size, pacing) are not here: the adapter advertises them.
+ */
+export type AiHandoverChannelPolicy = {
+  /**
+   * How long after a customer's last message the channel still lets us send
+   * them a takeover text (Messenger: Meta's 7-day HUMAN_AGENT window).
+   */
+  takeoverMessageWindowMs: number
+  /** A bulk hand-over to the AI reaches only contacts active within this many days. */
+  handToAiActiveWithinDays: number
+  /** Longest takeover or return text the channel accepts. */
+  messageMaxLength: number
+}
+
+const MS_PER_DAY = 24 * 60 * 60 * 1000
+
+export const AI_HANDOVER_CHANNEL_POLICIES = {
+  messenger: {
+    takeoverMessageWindowMs: 7 * MS_PER_DAY,
+    handToAiActiveWithinDays: 30,
+    messageMaxLength: 2000,
+  },
+} as const satisfies Partial<
+  Record<ThreadControlChannel, AiHandoverChannelPolicy>
+>
+
+/** Channels that can hand a conversation to an AI agent: the keys of the policies. */
+export type AiHandoverChannel = keyof typeof AI_HANDOVER_CHANNEL_POLICIES
+
+export const AI_HANDOVER_CHANNELS = Object.keys(
+  AI_HANDOVER_CHANNEL_POLICIES,
+) as AiHandoverChannel[]
+
+/** The AI hand-over channel for an integration type, or `null` when it has none. */
+export const parseAiHandoverChannel = (
+  channel: string | null | undefined,
+): AiHandoverChannel | null =>
+  channel != null && (AI_HANDOVER_CHANNELS as string[]).includes(channel)
+    ? (channel as AiHandoverChannel)
+    : null
+
+/**
+ * Routing channels whose archive auto-releases an owned thread on the channel
+ * (a `release` call so the number does not keep the conversation). A channel
+ * absent from this set skips the release on archive: nothing is enqueued and no
+ * idle state is recorded (Messenger: Meta has no release for a Page-owned
+ * thread, and the 24h window ends the thread by itself). Subset of
+ * `threadControlChannels`; shared code keys off this set, never a channel name.
+ */
+export const ARCHIVE_RELEASE_CHANNELS: readonly ThreadControlChannel[] = [
+  "whatsapp",
+]
+
+/** Whether archiving a contact should release its owned thread on the channel. */
+export const supportsArchiveRelease = (
+  channel: string | null | undefined,
+): channel is ThreadControlChannel =>
+  channel != null &&
+  (ARCHIVE_RELEASE_CHANNELS as readonly string[]).includes(channel)

@@ -1,0 +1,54 @@
+import { platformCredentialService } from "@chatbotx.io/business"
+import { ChatbotXException } from "@chatbotx.io/business/errors"
+import type { WorkspaceModel } from "@chatbotx.io/database/types"
+import { generateAdsAuthUrl } from "@chatbotx.io/integration-facebook-ads"
+import { redirect } from "next/navigation"
+import { getTranslations } from "next-intl/server"
+import { getOriginUrlFromHeader } from "@/lib/domain"
+import { resolveOwnerForWorkspace } from "@/lib/platform-credential-owner"
+import { buildProviderCallbackUrl } from "@/lib/provider-origin"
+
+export async function buildFacebookAdsAuthRedirect({
+  workspace,
+  refererPath,
+}: {
+  workspace: WorkspaceModel
+  refererPath: string
+}) {
+  // Facebook Ads reuses the Messenger Facebook app credential; the OAuth
+  // dialog only differs in the requested scopes (ads_read, ads_management).
+  const messengerCredential = await platformCredentialService.resolveForOwner({
+    ownerId: await resolveOwnerForWorkspace(workspace),
+    type: "messenger",
+  })
+  if (!messengerCredential) {
+    const t = await getTranslations()
+    throw new ChatbotXException(t("facebookAds.errors.invalidAppSettings"))
+  }
+
+  // Only the Messenger callback is registered as a redirect_uri with the
+  // Facebook app, so Facebook Ads OAuth lands there too. `flow` flags the
+  // Ads token-storage dispatch in the callback handler (`case "messenger"`'s
+  // `stateParams.flow === "facebookAds"` branch in
+  // `app/integrations/[...integration]/callback.ts`); `referer` is the page
+  // the user returns to on completion or cancel.
+  const redirectUrl = await buildProviderCallbackUrl(
+    messengerCredential,
+    "/integrations/messenger/callback",
+  )
+  const baseUrl = await getOriginUrlFromHeader()
+  const referer = new URL(refererPath, baseUrl).toString()
+
+  const authUrl = generateAdsAuthUrl({
+    clientId: messengerCredential.config.clientId,
+    version: messengerCredential.config.version,
+    redirectUrl,
+    stateParams: {
+      workspaceId: workspace.id,
+      referer,
+      flow: "facebookAds",
+    },
+  })
+
+  return redirect(authUrl)
+}

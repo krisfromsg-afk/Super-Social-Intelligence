@@ -1,0 +1,348 @@
+import { analyticsRoutes } from "@chatbotx.io/analytics-nextjs/routes"
+import { lazy } from "@orpc/server"
+import { workspaceAuthorizedMidddleware } from "@/middlewares/auth"
+import { authorizedAPI } from "@/orpc"
+
+// Every feature branch is a lazy router: the feature's api module (and its
+// import graph) only loads on the first call that targets it, instead of all
+// ~58 feature api modules loading with the route handler. Keeps server cold
+// start and the rpc/api route chunks small. See .agents/rules/no-dynamic-import.md
+// — dynamic import() is allowed in apps/builder (Next.js-built).
+export const router = {
+  adsAPI: lazy(() =>
+    import("@/features/ads/api").then((m) => ({ default: m.adsAPI })),
+  ),
+  adsCampaignAPI: lazy(() =>
+    import("@/features/ads-campaign/api").then((m) => ({
+      default: m.adsCampaignAPI,
+    })),
+  ),
+  googleAdsAPI: lazy(() =>
+    import("@/features/integration-google-ads/api").then((m) => ({
+      default: m.googleAdsAPI,
+    })),
+  ),
+  appointmentCalendarsAPI: lazy(() =>
+    import("@/features/appointment-calendars/api").then((m) => ({
+      default: m.appointmentCalendarsAPI,
+    })),
+  ),
+  appointmentsAPI: lazy(() =>
+    import("@/features/appointments/api").then((m) => ({
+      default: m.appointmentsAPI,
+    })),
+  ),
+  aiMcpServerAPIs: lazy(() =>
+    import("@/features/ai-mcp-servers/api").then((m) => ({
+      default: m.aiMcpServerAPIs,
+    })),
+  ),
+  aiAgentsAPI: lazy(() =>
+    import("@/features/ai-agents/api").then((m) => ({
+      default: m.aiAgentsAPI,
+    })),
+  ),
+  broadcastAPIs: lazy(() =>
+    import("@/features/broadcasts/api").then((m) => ({
+      default: m.broadcastAPIs,
+    })),
+  ),
+  conversationsAPI: lazy(() =>
+    import("@/features/conversations/api").then((m) => ({
+      default: m.conversationsAPI,
+    })),
+  ),
+  couponsAPI: lazy(() =>
+    import("@/features/coupons/api").then((m) => ({ default: m.couponsAPI })),
+  ),
+  deviceTokensAPI: lazy(() =>
+    import("@/features/device-tokens/api").then((m) => ({
+      default: m.deviceTokensAPI,
+    })),
+  ),
+  dynamicImagesAPI: lazy(() =>
+    import("@/features/dynamic-images/api").then((m) => ({
+      default: m.dynamicImagesAPI,
+    })),
+  ),
+  connectionsAPI: lazy(() =>
+    import("@/features/connections/api").then((m) => ({
+      default: m.connectionsAPI,
+    })),
+  ),
+  connectSessionsAPI: lazy(() =>
+    import("@/features/connections/api").then((m) => ({
+      default: m.connectSessionsAPI,
+    })),
+  ),
+  emailTopicsAPI: lazy(() =>
+    import("@/features/email-topics/api").then((m) => ({
+      default: m.emailTopicsAPI,
+    })),
+  ),
+  tagsAPI: lazy(() =>
+    import("@/features/tags/api").then((m) => ({ default: m.tagsAPI })),
+  ),
+  contactFilterAPI: lazy(() =>
+    import("@/features/contact-filter/api").then((m) => ({
+      default: m.contactFilterAPI,
+    })),
+  ),
+  customFieldsAPI: lazy(() =>
+    import("@/features/custom-fields/api").then((m) => ({
+      default: m.customFieldsAPI,
+    })),
+  ),
+  flowsAPI: lazy(() =>
+    import("@/features/flows/api").then((m) => ({ default: m.flowsAPI })),
+  ),
+  contactsAPIs: lazy(() =>
+    import("@/features/contacts/api").then((m) => ({
+      default: m.contactsAPIs,
+    })),
+  ),
+  contactNotesAPI: lazy(() =>
+    import("@/features/contact-notes/api/private").then((m) => ({
+      default: m.contactNotesAuthenticatedAPI,
+    })),
+  ),
+  contactSequencesAPI: lazy(() =>
+    import("@/features/contact-sequences/api/private").then((m) => ({
+      default: m.contactSequencesAuthenticatedAPI,
+    })),
+  ),
+  contactScanAPIs: lazy(() =>
+    import("@/features/contact-scan/api").then((m) => ({
+      default: m.contactScanAPIs,
+    })),
+  ),
+  aiHandoverAPIs: lazy(() =>
+    import("@/features/integration-ai-handover/api").then((m) => ({
+      default: m.aiHandoverAPIs,
+    })),
+  ),
+  channelPostAPIs: lazy(() =>
+    import("@/features/channel-posts/api").then((m) => ({
+      default: m.channelPostAPIs,
+    })),
+  ),
+  botFieldAPIs: lazy(() =>
+    import("@/features/bot-fields/api").then((m) => ({
+      default: m.botFieldAPIs,
+    })),
+  ),
+  integrationActiveCampaignAPI: lazy(() =>
+    import("@/features/integration-active-campaign/api").then((m) => ({
+      default: m.integrationActiveCampaignAPI,
+    })),
+  ),
+  integrationFacebookAdsAPI: lazy(() =>
+    import("@/features/integration-facebook-ads/api").then((m) => ({
+      default: m.integrationFacebookAdsAPI,
+    })),
+  ),
+  integrationDripAPI: lazy(() =>
+    import("@/features/integration-drip/api").then((m) => ({
+      default: m.integrationDripAPI,
+    })),
+  ),
+  integrationGetResponseAPI: lazy(() =>
+    import("@/features/integration-get-response/api").then((m) => ({
+      default: m.integrationGetResponseAPI,
+    })),
+  ),
+  integrationInstagramAPIs: lazy(() =>
+    import("@/features/integration-instagram/api").then((m) => ({
+      default: m.integrationInstagramAPIs,
+    })),
+  ),
+  integrationKlaviyoAPI: lazy(() =>
+    import("@/features/integration-klaviyo/api").then((m) => ({
+      default: m.integrationKlaviyoAPI,
+    })),
+  ),
+  integrationMailchimpAPI: lazy(() =>
+    import("@/features/integration-mailchimp/api").then((m) => ({
+      default: m.integrationMailchimpAPI,
+    })),
+  ),
+  integrationMailerLiteAPI: lazy(() =>
+    import("@/features/integration-mailer-lite/api").then((m) => ({
+      default: m.integrationMailerLiteAPI,
+    })),
+  ),
+  integrationMessengerAPIs: lazy(() =>
+    import("@/features/integration-messenger/api").then((m) => ({
+      default: m.integrationMessengerAPIs,
+    })),
+  ),
+  integrationMoosendAPI: lazy(() =>
+    import("@/features/integration-moosend/api").then((m) => ({
+      default: m.integrationMoosendAPI,
+    })),
+  ),
+  integrationSmtpAPI: lazy(() =>
+    import("@/features/integration-smtp/api").then((m) => ({
+      default: m.integrationSmtpAPI,
+    })),
+  ),
+  integrationSendGridAPI: lazy(() =>
+    import("@/features/integration-sendgrid/api").then((m) => ({
+      default: m.integrationSendGridAPI,
+    })),
+  ),
+  integrationWhatsappAPIs: lazy(() =>
+    import("@/features/integration-whatsapp/api").then((m) => ({
+      default: m.integrationWhatsappAPIs,
+    })),
+  ),
+  whatsappMessageTemplateAPIs: lazy(() =>
+    import("@/features/integration-whatsapp/message-templates/api").then(
+      (m) => ({ default: m.whatsappMessageTemplateAPIs }),
+    ),
+  ),
+  whatsappFlowAPIs: lazy(() =>
+    import("@/features/integration-whatsapp/flows/api").then((m) => ({
+      default: m.whatsappFlowAPIs,
+    })),
+  ),
+  messengerMessageTemplateAPIs: lazy(() =>
+    import("@/features/integration-messenger/message-templates/api").then(
+      (m) => ({ default: m.messengerMessageTemplateAPIs }),
+    ),
+  ),
+  savedRepliesAPI: lazy(() =>
+    import("@/features/saved-replies/api").then((m) => ({
+      default: m.savedRepliesAPI,
+    })),
+  ),
+  fbCommentsAPI: lazy(() =>
+    import("@/features/fb-comments/api").then((m) => ({
+      default: m.fbCommentsAPI,
+    })),
+  ),
+  igCommentsAPI: lazy(() =>
+    import("@/features/ig-comments/api").then((m) => ({
+      default: m.igCommentsAPI,
+    })),
+  ),
+  threadsCommentsAPI: lazy(() =>
+    import("@/features/threads-comments/api").then((m) => ({
+      default: m.threadsCommentsAPI,
+    })),
+  ),
+  igStoriesAPI: lazy(() =>
+    import("@/features/ig-stories/api").then((m) => ({
+      default: m.igStoriesAPI,
+    })),
+  ),
+  facebookLeadAdsAPI: lazy(() =>
+    import("@/features/facebook-lead-ad-automation/api").then((m) => ({
+      default: m.facebookLeadAdsAPI,
+    })),
+  ),
+  facebookMarketingMessagesAPI: lazy(() =>
+    import("@/features/facebook-marketing-messages/api").then((m) => ({
+      default: m.facebookMarketingMessagesAPI,
+    })),
+  ),
+  sequencesAPI: lazy(() =>
+    import("@/features/sequences/api").then((m) => ({
+      default: m.sequencesAPI,
+    })),
+  ),
+  aiFilesAPI: lazy(() =>
+    import("@/features/ai-files/api").then((m) => ({ default: m.aiFilesAPI })),
+  ),
+  inboxesAPI: lazy(() =>
+    import("@/features/inboxes/api").then((m) => ({ default: m.inboxesAPI })),
+  ),
+  spreadsheetsAPI: lazy(() =>
+    import("@/features/spreadsheets/api").then((m) => ({
+      default: m.spreadsheetsAPI,
+    })),
+  ),
+  workspaceMembersAPI: lazy(() =>
+    import("@/features/workspace-members/api").then((m) => ({
+      default: m.workspaceMembersAPI,
+    })),
+  ),
+  foldersAPI: lazy(() =>
+    import("@/features/folders/api").then((m) => ({ default: m.foldersAPI })),
+  ),
+  messagesAPI: lazy(() =>
+    import("@/features/messages/api").then((m) => ({ default: m.messagesAPI })),
+  ),
+  personasAPIs: lazy(() =>
+    import("@/features/personas/api").then((m) => ({
+      default: m.personasAPIs,
+    })),
+  ),
+  workspacesAPI: lazy(() =>
+    import("@/features/workspaces/api").then((m) => ({
+      default: m.workspacesAPI,
+    })),
+  ),
+  aiFunctionsAPI: lazy(() =>
+    import("@/features/ai-functions/api").then((m) => ({
+      default: m.aiFunctionsAPI,
+    })),
+  ),
+  platformCredentialsAPI: lazy(() =>
+    import("@/features/platform-credentials/api").then((m) => ({
+      default: m.platformCredentialsAPI,
+    })),
+  ),
+  productsAPI: lazy(() =>
+    import("@/features/products/api").then((m) => ({ default: m.productsAPI })),
+  ),
+  productCategoriesAPI: lazy(() =>
+    import("@/features/product-categories/api").then((m) => ({
+      default: m.productCategoriesAPI,
+    })),
+  ),
+  questionnairesAPI: lazy(() =>
+    import("@/features/questionnaires/api").then((m) => ({
+      default: m.questionnairesAPI,
+    })),
+  ),
+  refLinksAPI: lazy(() =>
+    import("@/features/reflinks/api").then((m) => ({ default: m.refLinksAPI })),
+  ),
+  realtimeAPI: lazy(() =>
+    import("@/features/realtime/api").then((m) => ({
+      default: m.realtimeAPI,
+    })),
+  ),
+  userPersistentMenusAPI: lazy(() =>
+    import("@/features/user-persistent-menus/api").then((m) => ({
+      default: m.userPersistentMenusAPI,
+    })),
+  ),
+  templatesAPI: lazy(() =>
+    import("@/features/templates/api").then((m) => ({
+      default: m.templatesAPI,
+    })),
+  ),
+  analyticsRoutes: authorizedAPI
+    // `workspaceAuthorizedMidddleware` (middlewares/auth.ts) takes an
+    // `(input) => input.workspaceId` mapper. Every other call site applies it
+    // to a single procedure whose `.input()` is already declared, so the
+    // mapper typechecks against a known input type. Here it's applied to the
+    // whole `analyticsRoutes` router before `.router()`, where oRPC has no
+    // single input type to infer from — `input` is `unknown`. The mapper is
+    // correct at runtime because every internal analytics route declares
+    // `workspaceId` in its own `.input()`. Real fix: per-procedure `.use()`
+    // across all 30 internal routes (orthogonal refactor, doubles this PR's
+    // blast radius) — deferred. The new public analytics router
+    // (features/analytics/api/public.ts) is independently typed and needs no
+    // such suppression.
+    // @ts-expect-error
+    .use(workspaceAuthorizedMidddleware, (input) => input.workspaceId)
+    .router(analyticsRoutes),
+  mediaLibraryAPI: lazy(() =>
+    import("@/features/media-library/api").then((m) => ({
+      default: m.mediaLibraryAPI,
+    })),
+  ),
+}

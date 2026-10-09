@@ -1,0 +1,16 @@
+{
+  "name": "Super Social Intelligence",
+  "short_name": "SSI",
+  "icons": [
+    {
+      "src": "/brand/icon_black.svg",
+      "sizes": "any",
+      "type": "image/svg+xml",
+      "purpose": "any"
+    }
+  ],
+  "theme_color": "#ffffff",
+  "background_color": "#ffffff",
+  "display": "standalone",
+  "description": "AI-powered unified social inbox by Spider Hubs"
+}

@@ -1,0 +1,189 @@
+import { contactSequenceService } from "@chatbotx.io/business/contact-sequence"
+import { sequenceConnections } from "@chatbotx.io/redis"
+import { SchedulerClient } from "@chatbotx.io/scheduler"
+import { advanceEnrollment } from "@chatbotx.io/sequence-scheduler"
+import type { IntegrationJobSendSequenceFlow } from "@chatbotx.io/worker-config"
+import type { Job } from "bullmq"
+import { isFinalAttempt } from "../../lib/job-attempts"
+import { logger } from "../../lib/logger"
+import { StepExecutorService } from "../../sequence-scheduler/services/step-executor.service"
+import { sendFlowDirect } from "./send-flow-direct"
+
+type SendSequenceFlowData = IntegrationJobSendSequenceFlow["data"]
+
+let schedulerClient: SchedulerClient | null = null
+const stepExecutor = new StepExecutorService()
+
+async function getSchedulerClient(): Promise<SchedulerClient> {
+  if (!schedulerClient) {
+    const redis = await sequenceConnections.useExisting()
+    schedulerClient = new SchedulerClient(redis)
+  }
+  return schedulerClient
+}
+
+async function fetchDispatch(dispatchId: string, workspaceId: string) {
+  return await contactSequenceService.findRunningDispatch({
+    dispatchId,
+    workspaceId,
+  })
+}
+
+async function markDispatchCompleted(
+  dispatchId: string,
+  workspaceId: string,
+  sentAt: Date,
+): Promise<void> {
+  await contactSequenceService.markDispatchCompleted({
+    dispatchId,
+    workspaceId,
+    sentAt,
+  })
+}
+
+async function markDispatchCanceled(
+  dispatchId: string,
+  workspaceId: string,
+  reason: string,
+): Promise<void> {
+  await contactSequenceService.markDispatchCanceled({
+    dispatchId,
+    workspaceId,
+    reason,
+  })
+}
+
+async function markDispatchFailed(
+  dispatchId: string,
+  workspaceId: string,
+  errorMessage: string,
+): Promise<void> {
+  await contactSequenceService.markDispatchFailed({
+    dispatchId,
+    workspaceId,
+    errorMessage,
+  })
+}
+
+async function runSendSequenceFlow(
+  data: SendSequenceFlowData,
+  job: Job,
+): Promise<void> {
+  const { dispatchId, workspaceId, stepId, bucket, contactId, sequenceId } =
+    data
+
+  const dispatch = await fetchDispatch(dispatchId, workspaceId)
+  if (!dispatch) {
+    return
+  }
+
+  const step = await stepExecutor.fetchStep(stepId)
+  const validation = stepExecutor.validateStep(step)
+  const scheduler = await getSchedulerClient()
+
+  if (!validation.valid) {
+    await markDispatchCanceled(dispatchId, workspaceId, validation.reason)
+
+    if (step) {
+      await advanceEnrollment({
+        enrollmentId: data.enrollmentId,
+        workspaceId,
+        sequenceId,
+        contactId,
+        currentStep: { id: step.id, order: step.order },
+        sentAt: new Date(),
+        scheduler,
+      })
+    }
+
+    await scheduler.removeFromSchedule(bucket, dispatchId)
+    return
+  }
+
+  const validStep = validation.step
+  const completedAt = dispatch.completedAt
+
+  let sentAt: Date
+  if (completedAt) {
+    sentAt = completedAt
+  } else {
+    await sendFlowDirect({
+      flowId: validStep.flow.id,
+      workspaceId,
+      contactId: data.contactId,
+      metadata: data.metadata,
+      flowExecutionKey: job.id,
+    })
+
+    sentAt = new Date()
+    await markDispatchCompleted(dispatchId, workspaceId, sentAt)
+  }
+
+  await advanceEnrollment({
+    enrollmentId: data.enrollmentId,
+    workspaceId,
+    sequenceId,
+    contactId,
+    currentStep: { id: validStep.id, order: validStep.order },
+    sentAt,
+    scheduler,
+  })
+
+  await scheduler.removeFromSchedule(bucket, dispatchId)
+}
+
+async function safeTerminalCleanup(
+  data: SendSequenceFlowData,
+  err: unknown,
+  job: Job,
+): Promise<void> {
+  const { dispatchId, workspaceId, bucket } = data
+  const message = err instanceof Error ? err.message : "Unknown error"
+
+  try {
+    await markDispatchFailed(dispatchId, workspaceId, message)
+  } catch (error) {
+    logger.error(
+      { error, dispatchId, jobId: job.id },
+      "markDispatchFailed failed in terminal cleanup",
+    )
+  }
+
+  try {
+    const scheduler = await getSchedulerClient()
+    await scheduler.removeFromSchedule(bucket, dispatchId)
+  } catch (error) {
+    logger.error(
+      { error, dispatchId, jobId: job.id },
+      "removeFromSchedule failed in terminal cleanup",
+    )
+  }
+}
+
+export async function handleSendSequenceFlow(
+  data: SendSequenceFlowData,
+  job: Job,
+): Promise<void> {
+  try {
+    await runSendSequenceFlow(data, job)
+  } catch (err) {
+    const finalAttempt = isFinalAttempt(job)
+
+    logger.error(
+      {
+        err,
+        dispatchId: data.dispatchId,
+        jobId: job.id,
+        attempt: job.attemptsMade + 1,
+        isFinalAttempt: finalAttempt,
+      },
+      "sendSequenceFlow handler failed",
+    )
+
+    if (finalAttempt) {
+      await safeTerminalCleanup(data, err, job)
+    }
+
+    throw err
+  }
+}
