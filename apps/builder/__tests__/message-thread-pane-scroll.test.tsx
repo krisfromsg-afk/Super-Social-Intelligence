@@ -14,6 +14,18 @@ vi.mock("@/features/conversations/actions/disable-bot.action", () => ({
   disableBotAction: { bind: () => vi.fn() },
 }))
 
+vi.mock("@/features/conversations/actions/enable-bot.action", () => ({
+  enableBotAction: { bind: () => vi.fn() },
+}))
+
+vi.mock("@/features/conversations/actions/keep-human-only.action", () => ({
+  keepHumanOnlyAction: { bind: () => vi.fn() },
+}))
+
+vi.mock("@/features/ssi-inbox/bot-activity-panel", () => ({
+  SsiBotActivityPanel: () => null,
+}))
+
 // Read-tracking rules are covered in use-thread-read-tracking.test.tsx; here
 // only the wiring (handlers land on the thread column) is asserted.
 const threadClickCaptureMock = vi.fn()
