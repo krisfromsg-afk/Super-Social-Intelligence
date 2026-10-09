@@ -8,8 +8,9 @@ set -euo pipefail
 readonly EXPECTED="f1ca4a8f74cc08ca68d601ba2ce0e58bd9c5e67c"
 readonly SOURCE_REPO="https://github.com/ChatbotXIO/ChatbotX.git"
 readonly WORK="${RUNNER_TEMP:-/tmp}/ssi-chatbotx-community"
-readonly REF="feat/ssi-foundation-rebrand"
+readonly REF="feat/ssi-clean-history-rebuild"
 
+[[ "${SSI_LICENSE_REVIEW_APPROVED:-}" == "yes" ]] || { echo "STOP-SHIP: upstream sync requires explicit source/license review first" >&2; exit 1; }
 [[ "${UPSTREAM_SHA:-$EXPECTED}" == "$EXPECTED" ]] || { echo "Pinned SHA mismatch; require reviewed sync change" >&2; exit 1; }
 [[ "${GITHUB_REF_NAME:-$REF}" == "$REF" ]] || { echo "Unexpected target branch" >&2; exit 1; }
 [[ ! -e apps/builder/src/enterprise ]] || { echo "Refusing to import on top of prohibited folder" >&2; exit 1; }
