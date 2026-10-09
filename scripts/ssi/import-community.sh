@@ -13,6 +13,10 @@ readonly REF="feat/ssi-foundation-rebrand"
 [[ "${UPSTREAM_SHA:-$EXPECTED}" == "$EXPECTED" ]] || { echo "Pinned SHA mismatch; require reviewed sync change" >&2; exit 1; }
 [[ "${GITHUB_REF_NAME:-$REF}" == "$REF" ]] || { echo "Unexpected target branch" >&2; exit 1; }
 [[ ! -e apps/builder/src/enterprise ]] || { echo "Refusing to import on top of prohibited folder" >&2; exit 1; }
+[[ ! -e packages/database/src/schema/enterprise/LICENSE ]] || {
+  echo "BLOCKER: existing Community branch contains nested Commercial License. Rebuild from a reviewed clean tree, not this history." >&2
+  exit 1
+}
 command -v rsync >/dev/null
 command -v git >/dev/null
 
@@ -23,6 +27,12 @@ git -C "$WORK" remote add origin "$SOURCE_REPO"
 git -C "$WORK" fetch --quiet --depth=1 origin "$EXPECTED"
 git -C "$WORK" checkout --quiet --detach "$EXPECTED"
 [[ "$(git -C "$WORK" rev-parse HEAD)" == "$EXPECTED" ]]
+
+# Block unreviewed nested proprietary license scopes outside the known UI folder.
+if find "$WORK" -type f \( -iname LICENSE -o -iname LICENSE.txt -o -iname LICENSE.md \) -exec grep -l 'ChatbotX Commercial License' {} + | grep -q .; then
+  echo "BLOCKER: nested ChatbotX Commercial License detected in pinned upstream. No import authorized." >&2
+  exit 1
+fi
 
 rsync -a "$WORK/" ./ \
   --exclude='/.git/' \

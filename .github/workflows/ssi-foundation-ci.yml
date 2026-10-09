@@ -25,6 +25,12 @@ jobs:
         shell: bash
         run: |
           test ! -e apps/builder/src/enterprise
+          # Do not claim MIT-only compliance when nested commercial scopes exist.
+          test ! -e packages/database/src/schema/enterprise/LICENSE
+          if find packages apps integrations -type f -iname 'LICENSE*' -exec grep -l 'ChatbotX Commercial License' {} + | grep -q .; then
+            echo 'Unexpected nested ChatbotX Commercial License' >&2
+            exit 1
+          fi
           test -f LICENSE
           grep -q 'Copyright (c) 2024-present AhaChat LLC' LICENSE
           test -f packages/ai/package.json

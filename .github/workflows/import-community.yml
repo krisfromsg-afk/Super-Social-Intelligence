@@ -29,6 +29,7 @@ jobs:
         run: |
           test -f docs/ssi/UPSTREAM_POLICY.md
           test ! -e apps/builder/src/enterprise
+          test ! -e packages/database/src/schema/enterprise/LICENSE
       - name: Install rsync
         run: |
           command -v rsync
@@ -39,6 +40,7 @@ jobs:
       - name: Verify repository tree
         run: |
           test ! -e apps/builder/src/enterprise
+          test ! -e packages/database/src/schema/enterprise/LICENSE
           test -f packages/ai/package.json
           test -f apps/builder/package.json
           test -f LICENSE

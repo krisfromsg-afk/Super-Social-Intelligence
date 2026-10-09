@@ -32,3 +32,7 @@ Treat brand strings and package symbols separately. UI labels/docs/branding can 
 ## Current limitations
 
 This repository is a public bootstrap. The import automation will require GitHub Actions to be enabled with `contents: write` permission. Permission or enterprise imports must not be bypassed. Third-party API permissions/quotas are outside the source license.
+
+## STOP-SHIP licensing finding — 2026-10-09
+
+A nested `packages/database/src/schema/enterprise/LICENSE` was discovered after initial source import. It states the ChatbotX Commercial License. The earlier MIT-only assumption and exclusion rule for `apps/builder/src/enterprise/**` are insufficient. Issue #4 blocks merge and production. This does **not** decide the legal scope of all neighboring files; require a full file-by-file provenance and licensing review. A new clean-tree history is required if any restricted blob was copied into the public feature branch. Do not silently delete just the notice while retaining restricted code, and do not use an unreviewed dependency shim to hide the problem.
