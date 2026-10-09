@@ -2,7 +2,7 @@ name: SSI Foundation CI
 
 on:
   push:
-    branches: [feat/ssi-foundation-rebrand]
+    branches: [feat/ssi-foundation-rebrand, 'feat/ssi-*']
     paths:
       - 'apps/**'
       - 'packages/**'
