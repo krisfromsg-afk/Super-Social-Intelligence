@@ -25,6 +25,7 @@ import { MessageInput } from "../messages/components/message-input"
 import MessageHead from "../messages/message-head"
 import { MessageList } from "../messages/message-list"
 import { useChatStore } from "./store/chat-store-provider"
+import { SsiBotActivityPanel } from "@/features/ssi-inbox/bot-activity-panel"
 
 /**
  * The inbox's three panes, split out of `chat-layout` so the layout file only
@@ -183,10 +184,13 @@ export function ContactDetailPane({
         <Loader2Icon className="mx-auto my-4 animate-spin" />
       )}
       {activeConversation && (
-        <ContactInboxPanel
-          activeConversationId={activeConversation.id}
-          workspaceId={workspaceId}
-        />
+        <div className="flex min-h-0 flex-col gap-3">
+          <SsiBotActivityPanel conversation={activeConversation} />
+          <ContactInboxPanel
+            activeConversationId={activeConversation.id}
+            workspaceId={workspaceId}
+          />
+        </div>
       )}
       {shouldShowEmptyState && (
         <PaneEmptyState

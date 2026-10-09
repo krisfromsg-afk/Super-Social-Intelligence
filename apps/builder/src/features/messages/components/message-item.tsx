@@ -47,6 +47,7 @@ import Link from "next/link"
 import { useTranslations } from "next-intl"
 import { useState } from "react"
 import type { AttachmentResource } from "@/features/attachments/schema/resource"
+import { getSsiOutboundAuthor } from "@/features/ssi-inbox/message-provenance"
 import { useAttachmentSource } from "@/features/attachments/utils"
 import {
   getThreadControlActivity,
@@ -178,6 +179,9 @@ export const MessageItem = (props: MessageItemProps) => {
   }
 
   const createdAt = new Date(message.createdAt)
+  // SenderType=bot may be an LLM agent OR a classic flow. Never call every
+  // automated message an AI-generated answer without stronger provenance.
+  const ssiSender = getSsiOutboundAuthor(message)
 
   return (
     <MessageBubble className="group" variant={variant}>
@@ -195,6 +199,15 @@ export const MessageItem = (props: MessageItemProps) => {
           variant === "full" && "mx-auto",
         )}
       >
+        {!guestDisplay && ssiSender && !isPartnerEcho && (
+          <span
+            aria-label={`Sent by ${ssiSender.accessibleName}`}
+            className="self-end rounded-full border border-border px-2 py-0.5 text-[10px] font-medium text-muted-foreground"
+            data-testid="ssi-message-provenance"
+          >
+            {ssiSender.label}
+          </span>
+        )}
         {storyReply && <StoryReplyContext story={storyReply.story} />}
         {isPartnerEcho && (
           <span className="flex items-center gap-1 self-end text-muted-foreground text-xs">
