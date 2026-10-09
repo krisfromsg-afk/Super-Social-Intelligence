@@ -39,16 +39,21 @@ export const tenantModel = pgTable("Tenant", {
   magicLinkEmailTemplate: jsonb().$type<MailTemplate>(),
   accountCredentialsEmailTemplate: jsonb().$type<MailTemplate>(),
   hiddenChannels: jsonb().$type<import("@chatbotx.io/utils/channel").ChannelType[]>(),
-}, (t) => [uniqueIndex("SSI_Tenant_ownerId_unique").on(t.ownerId)])
+}, (t) => [uniqueIndex("Tenant_ownerId_key").on(t.ownerId)])
 
 export const customDomainModel = pgTable("CustomDomain", {
   ...sharedColumns,
   tenantId: bigintAsString().notNull().references(() => tenantModel.id, { onDelete: "cascade" }),
   domain: text().notNull(),
   status: text().notNull().default("pending"),
+  verifiedAt: timestamp(timestampConfig),
+  cfHostnameId: text(),
+  cfOwnershipValue: text(),
+  cfAcmeValue: text(),
 }, (t) => [
-  uniqueIndex("SSI_CustomDomain_domain_unique").on(t.domain),
-  uniqueIndex("SSI_CustomDomain_tenant_unique").on(t.tenantId),
+  uniqueIndex("CustomDomain_domain_key").on(t.domain),
+  uniqueIndex("CustomDomain_tenantId_key").on(t.tenantId),
+  index("CustomDomain_status_idx").on(t.status),
 ])
 
 export const tenantHelpItemModel = pgTable("TenantHelpItem", {
@@ -58,7 +63,7 @@ export const tenantHelpItemModel = pgTable("TenantHelpItem", {
   url: text().notNull(),
   icon: text(),
   position: integer().notNull().default(0),
-}, (t) => [index("SSI_TenantHelpItem_tenant_position").on(t.tenantId, t.position)])
+}, (t) => [index("TenantHelpItem_tenantId_position_idx").on(t.tenantId, t.position)])
 
 export const auditLogModel = pgTable("AuditLog", {
   ...sharedColumns,
@@ -72,8 +77,12 @@ export const auditLogModel = pgTable("AuditLog", {
   userAgent: text(),
   source: text(),
 }, (t) => [
-  index("SSI_AuditLog_workspace_created").on(t.workspaceId, t.createdAt),
-  index("SSI_AuditLog_workspace_user").on(t.workspaceId, t.userId),
+  index("AuditLog_workspaceId_createdAt_id_idx").on(
+    t.workspaceId, t.createdAt.desc().nullsLast(), t.id.desc().nullsLast(),
+  ),
+  index("AuditLog_workspaceId_userId_createdAt_id_idx").on(
+    t.workspaceId, t.userId, t.createdAt.desc().nullsLast(), t.id.desc().nullsLast(),
+  ).where(sql`"userId" IS NOT NULL`),
 ])
 
 export const workspaceUsageModel = pgTable("WorkspaceUsage", {
@@ -85,7 +94,7 @@ export const workspaceUsageModel = pgTable("WorkspaceUsage", {
   botMessagesUsed: integer().notNull().default(0),
   macUsed: integer().notNull().default(0),
   syncedAt: timestamp(timestampConfig).notNull().defaultNow(),
-}, (t) => [uniqueIndex("SSI_WorkspaceUsage_workspace_unique").on(t.workspaceId)])
+}, (t) => [uniqueIndex("WorkspaceUsage_workspaceId_key").on(t.workspaceId)])
 
 export const userQuotaModel = pgTable("UserQuota", {
   ...sharedColumns,
@@ -109,7 +118,7 @@ export const userQuotaModel = pgTable("UserQuota", {
   channelsTornDownAt: timestamp(timestampConfig),
   syncedAt: timestamp(timestampConfig).notNull().defaultNow(),
 }, (t) => [
-  uniqueIndex("SSI_UserQuota_user_unique").on(t.userId),
-  index("SSI_UserQuota_trial_expiry").on(t.planStatus, t.periodEnd),
-  index("SSI_UserQuota_active_trial").on(t.userId).where(sql`"channelsTornDownAt" IS NULL AND "planStatus" = 'trial'`),
+  uniqueIndex("UserQuota_userId_key").on(t.userId),
+  index("UserQuota_due_expired_trial_idx").on(t.userId).where(sql`"channelsTornDownAt" IS NULL AND "planStatus" = 'trial'`),
+
 ])
