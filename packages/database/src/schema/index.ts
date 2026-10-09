@@ -1,3 +1,4 @@
+export { ROOT_TENANT_ID } from "../partials/shared"
 export * from "drizzle-orm/zod"
 export * from "../sharding/message/schema/shard"
 export * from "../sharding/message/schema/time-range"
