@@ -12,7 +12,7 @@ import {
   timestampConfig,
 } from "../partials/shared"
 import { userModel } from "./auth-user"
-import { tenantModel } from "./enterprise/tenant"
+import { tenantModel } from "./ssi-platform/models"
 
 export const accountModel = pgTable(
   "Account",

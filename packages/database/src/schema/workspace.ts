@@ -18,7 +18,7 @@ import {
   timestampConfig,
 } from "../partials/shared"
 import { userModel } from "./auth-user"
-import { tenantModel } from "./enterprise/tenant"
+import { tenantModel } from "./ssi-platform/models"
 
 // Cast to the (non-empty) literal-union tuple — not `.enum` and not widened to
 // `[string, ...string[]]` — so the column's `enumValues` stays a literal

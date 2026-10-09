@@ -136,6 +136,7 @@ import { conditionRelations } from "./trigger-condition"
 import { triggerContactHistoryRelations } from "./trigger-contact-history"
 import { triggerExecutionRelations } from "./trigger-execution"
 import { triggerStatsRelations } from "./trigger-stats"
+import { ssiPlatformRelations } from "./ssi-platform"
 import { userRelations } from "./user"
 import { userDeviceTokenRelations } from "./user-device-token"
 import { userPersistentMenuRelations } from "./user-persistent-menu"
@@ -169,6 +170,7 @@ export const relations = {
   ...templateInstallationRelations,
   ...templateInstalledResourceRelations,
   ...accountRelations,
+  ...ssiPlatformRelations,
   ...userRelations,
   ...workspaceRelations,
   ...workspaceApiTokenRelations,

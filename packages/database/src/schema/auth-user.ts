@@ -11,7 +11,7 @@ import {
   ROOT_TENANT_ID,
   sharedColumns,
 } from "../partials/shared"
-import { tenantModel } from "./enterprise/tenant"
+import { tenantModel } from "./ssi-platform/models"
 
 export const userModel = pgTable(
   "User",

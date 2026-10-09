@@ -19,7 +19,7 @@ import type {
   TemplateSelection,
 } from "../partials/template"
 import { userModel } from "./auth-user"
-import { tenantModel } from "./enterprise/tenant"
+import { tenantModel } from "./ssi-platform/models"
 import { workspaceModel } from "./workspace"
 
 /**
