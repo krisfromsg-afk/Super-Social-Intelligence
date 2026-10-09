@@ -1,32 +1,38 @@
-# SSI Phase Status
+# SSI delivery status — authoritative branch tracking
 
-> **Clean-history branch caveat (2026-10-09):** On `feat/ssi-clean-history-rebuild` the 8 disputed schema files and 6 dependent relation files are absent, and new branch ancestry starts from clean `main`. License/file-boundary test passed in initial CI run 37963197169; targeted Inbox/Human Only tests also passed. However **builder TypeScript failed**, reporting 123 compiler error lines (including cascading dependency errors), because existing business/worker modules still use removed database entities. This checkpoint is **NOT build-ready, NOT merged, NOT license-cleared, and NOT production-safe**. See `CLEAN_REBUILD_NOTE.md` and PR #5. Older CI success statements below refer solely to prior feature branches/checkpoints, not this clean branch.
+Last audited: 2026-10-10 (Asia/Ho_Chi_Minh). This document tracks **implementation**, not a release announcement.
 
-Updated 2026-10-09.
+## What is actually on `main`?
 
-| Phase | Status | Proof |
-|---|---|---|
-| 00A: initialize repo/feature branch | DONE | GitHub branch `feat/ssi-foundation-rebrand` |
-| 00B: product and licensing plan | DONE | This branch: MASTER_PLAN, RAG_ARCHITECTURE, UPSTREAM_POLICY |
-| 00C: pinned Community source import | DONE | Actions run 37918099480: success; source import commit 508ece6610ed |
-| 00D: baseline build and licensing dependency repair | DONE (foundation CI) | Runs 37919233260 + 37919241179: dependency install, builder check-types, Next.js build passed |
-| 01: SSI rebrand | IN PROGRESS | Default product name, wordmark assets, web manifest, attribution |
-| 02: omnichannel inbox modernization | IN PROGRESS | Sender provenance badges + truthful automation activity panel on Phase02 feature branch; no live API validation |
-| 03: AI Personality Studio | NOT STARTED | N/A |
-| 04: Smart RAG and Drive/Docs/Sheets | NOT STARTED | Architecture only |
-| 05: tenancy/security/production | NOT STARTED | N/A |
-| 06: analytics/mobile/publishing | NOT STARTED | N/A |
+Until this documentation-only PR merges, `main` contains the initialization README/commit only. The application code, partially rebranded Community source and Phase 2 increment live in [PR #5](https://github.com/krisfromsg-afk/Super-Social-Intelligence/pull/5) on `feat/ssi-clean-history-rebuild`, **not on `main`**.
 
-No live OAuth credentials or platform API test accounts have been supplied.
+| Workstream | Current proof | Acceptance |
+| --- | --- | --- |
+| Phase 00/01 planning, source import, brand basics | Clean-parent PR #5; foundation CI for commit `1bcf9180` passed (install, focused Inbox tests, TypeScript, Next.js build). | **IN PROGRESS / NOT MERGED**. Licensing scope, migration compatibility and runtime smoke gate remain |
+| Phase 02 Inbox increment | Bot sender badges, outbound bot activity, manual indefinite Human Only and explicit enable action, cross-tab state tests on PR #5 | **PARTIAL / NOT ACCEPTED**. Requires verified LLM/flow provenance, Copilot approval drafts, send gates, channel validation and security E2E |
+| Phase 03 Personality Studio | Plan in MASTER_PLAN.md | **NOT STARTED** |
+| Phase 04 Smart RAG + Google Drive/Docs/Sheets sync | Architecture in RAG_ARCHITECTURE.md | **NOT STARTED** (some upstream Community RAG primitives exist; SSI enhancements not shipped) |
+| Phase 05 production hardening | Backlog only | **NOT ACCEPTED** |
+| Phase 06 growth modules | Deferred | **NOT STARTED** |
 
-## Next exact engineering sequence
+## Delivery / merge gates
 
-1. GitHub Actions completes license-filtered source import.
-2. Inspect imported tree for forbidden enterprise code and references; document violations.
-3. Fix imports and build without proprietary content.
-4. Ship SSI brand constants and layout, then gradually migrate namespaces.
-5. Add integration tests and small PRs for inbox, persona, RAG ingestion and Google sync.
+- [x] Rebuild canonical feature snapshot from `main` parent (clean-ancestry feature branch)
+- [x] Remove quarantined nested commercially labelled schema and coupled relations from the canonical branch tree
+- [x] Reconnect necessary database model contracts with independently authored SSI models (commit `1bcf9180`)
+- [x] Targeted foundation CI passes at `1bcf9180`
+- [ ] Complete broad regression, migration drift/rollback and real DB tests
+- [ ] Confirm license scope of all source, dependencies, migrations and distributed artifacts (issue #4)
+- [ ] Independently replace or remove any remaining restricted source; clean legacy public refs/history
+- [ ] Validate auth/workspace isolation, production build runtime, mobile UX and real provider OAuth/webhook fixtures
+- [ ] Implement Phase 02 remaining P2.3-P2.9 and pass issue #3 gate
+- [ ] Merge implementation PR #5 only after the applicable scope and release gates pass
 
-## Additional status 2026-10-09
+## Active references
 
-Phase 02 increment A/B: sender badges, bot activity, durable Human Only, re-enable control and cross-tab sync committed on `feat/ssi-inbox-ai-visibility-phase02`. Broad regression remediations committed; latest CI results must be reviewed. Phase 02 overall **IN PROGRESS / NOT ACCEPTED**. Merge is **BLOCKED by issue #4** (nested Commercial License and historical import provenance). A passing builder check is not a release approval.
+- [PR #5 clean-source rebuild](https://github.com/krisfromsg-afk/Super-Social-Intelligence/pull/5)
+- [Issue #3 Phase 02 acceptance](https://github.com/krisfromsg-afk/Super-Social-Intelligence/issues/3)
+- [Issue #4 licensing/provenance blocker](https://github.com/krisfromsg-afk/Super-Social-Intelligence/issues/4)
+- [Foundation CI success at 1bcf9180](https://github.com/krisfromsg-afk/Super-Social-Intelligence/actions/runs/37964353238)
+
+Never treat green TypeScript/build as production acceptance. No live OAuth/staging certification is claimed.

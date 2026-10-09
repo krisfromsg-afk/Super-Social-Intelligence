@@ -1,22 +1,22 @@
 # Super Social Intelligence (SSI)
 
-**AI-agent-first omnichannel customer intelligence platform** by Spider Hubs.
+**Spider Hubs' AI-first omnichannel customer intelligence platform — under development.**
 
-This repository is being initialized from the [ChatbotX Community Edition](https://github.com/ChatbotXIO/ChatbotX). SSI will provide a shared inbox, brand-specific AI personalities, grounded RAG over business knowledge, customer memory, controlled tool use, and multi-account social integrations.
+SSI aims to combine a unified social inbox, AI Agent/Copilot/Autopilot with human override, customer context, business knowledge/RAG and authorized social channel integrations.
 
-## Current project status
+## What is merged?
 
-- **Planning and foundation initialization:** in progress on `feat/ssi-foundation-rebrand`.
-- **Full upstream Community source import:** pending the license-filtered import workflow.
-- **Production-ready AI Agent, Google Drive sync, and RAG upgrades:** not yet implemented.
-- **Live channel integration:** requires independently approved platform credentials and verification.
+**Application source is not yet merged to `main`.** The active application and partial Phase 1/Phase 2 code currently live in the [canonical clean-parent draft PR #5](https://github.com/krisfromsg-afk/Super-Social-Intelligence/pull/5). Prior Foundation/Inbox PRs #1/#2 were closed without merging because their history included a disputed commercial-license subtree.
 
-See `docs/ssi/MASTER_PLAN.md`, `docs/ssi/RAG_ARCHITECTURE.md`, `docs/ssi/UPSTREAM_POLICY.md` and `docs/ssi/PHASE_STATUS.md` on the feature branch.
+- **Foundation:** Source snapshot, early SSI branding, Inbox base and TypeScript/Next.js build are available on the PR #5 branch; not production accepted.
+- **Inbox Phase 2:** Outgoing sender badges, actual automation message activity, indefinite Human Only toggle with re-enable and focused tests are in development; three-state approval mode and verified LLM/RAG traces remain unimplemented.
+- **Personality Studio and Smart Knowledge Hub:** Planned, not yet delivered as full SSI features.
+- **Deployment/live platform OAuth:** Not certified.
 
-## Provenance and licensing
+See [SSI delivery status](docs/ssi/PHASE_STATUS.md), [master plan](docs/ssi/MASTER_PLAN.md), [Phase 2 acceptance plan](docs/ssi/PHASE02_COMPLETION_PLAN.md), [RAG architecture](docs/ssi/RAG_ARCHITECTURE.md), and [upstream policy](docs/ssi/UPSTREAM_POLICY.md).
 
-Upstream: https://github.com/ChatbotXIO/ChatbotX
+## Source and licensing
 
-The source is **mixed-license**. Most upstream code is MIT, while `apps/builder/src/enterprise/` is proprietary and **must not** be imported into SSI without a separate license. The original MIT copyright notice must be preserved. Upstream changes are not automatically safe to merge without filtering and review.
+The project builds on Community Edition source from [ChatbotX](https://github.com/ChatbotXIO/ChatbotX) with retained MIT/third-party notices. Certain source areas have different licensing; no restricted source should be copied into SSI without permission. The [commercial-source blocker](https://github.com/krisfromsg-afk/Super-Social-Intelligence/issues/4) is still open pending provenance verification. Spider Hubs-authored features are developed separately.
 
-Do not commit secrets or customer OAuth tokens.
+Do not commit secrets, OAuth tokens or production customer data.
