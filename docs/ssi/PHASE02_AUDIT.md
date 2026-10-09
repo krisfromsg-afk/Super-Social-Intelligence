@@ -34,3 +34,14 @@ Vitest suite, database isolation/migration tests, agent human-handoff concurrenc
 ## Manual Human Only
 
 SSI extends Community bot state to accept `botResumeAt:null`. Since the existing `ensureActive` handler does not auto-resume without a deadline, operator-selected Human Only stays disabled until someone explicitly enables the bot again. The original 24h pause is retained as a separate action. This is not yet the draft-approval Copilot mode.
+
+## 2026-10-09 follow-up engineering checkpoint
+
+- Added an explicit Enable Bot action in the thread toolbar when the conversation is indefinitely Human Only; without this, the prior control disappeared and could not be restored from that surface.
+- Activity panel now filters by both workspace and conversation and sorts the actual loaded outbound bot replies by timestamp instead of assuming array order.
+- Added a cross-tab realtime bot state event carrying BOTH `botEnabled` and the nullable `botResumeAt`; old incomplete events are ignored to avoid changing a temporary pause into permanent Human Only. Added focused unit tests.
+- Detected eight builder regression failures against the imported snapshot (unregistered SSI action, commercial endpoints removed from API spec, stale webchat branding assertions, absent enterprise scan dir and obsolete billing UI fixture). Updated relevant contracts; full rerun verdict is required before any merge claim.
+- **STOP-SHIP issue #4:** nested `packages/database/src/schema/enterprise/LICENSE` indicates Commercial License. The initial import filter and license audit were insufficient. Both PRs remain blocked for merge pending legal/provenance review, removal of restricted source and sanitized Git history.
+- **Still missing**: actual LLM provenance vs flow, persisted secured retriever/tool traces, Copilot approval queue and atomic send gates, provider OAuth/webhook live test evidence, final responsive/a11y E2E. The current increment is NOT complete Phase 02 and is NOT production accepted.
+
+Review links: issue #3 (phase gate), issue #4 (licensing blocker).

@@ -20,7 +20,13 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - name: License boundary
-        run: test ! -e apps/builder/src/enterprise
+        run: |
+          test ! -e apps/builder/src/enterprise
+          test ! -e packages/database/src/schema/enterprise/LICENSE
+          if find packages apps integrations -type f -iname 'LICENSE*' -exec grep -l 'ChatbotX Commercial License' {} + | grep -q .; then
+            echo 'STOP-SHIP: unreviewed nested Commercial License (issue #4)' >&2
+            exit 1
+          fi
       - uses: pnpm/action-setup@v4
       - uses: actions/setup-node@v4
         with:

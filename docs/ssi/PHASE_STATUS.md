@@ -24,3 +24,7 @@ No live OAuth credentials or platform API test accounts have been supplied.
 3. Fix imports and build without proprietary content.
 4. Ship SSI brand constants and layout, then gradually migrate namespaces.
 5. Add integration tests and small PRs for inbox, persona, RAG ingestion and Google sync.
+
+## Additional status 2026-10-09
+
+Phase 02 increment A/B: sender badges, bot activity, durable Human Only, re-enable control and cross-tab sync committed on `feat/ssi-inbox-ai-visibility-phase02`. Broad regression remediations committed; latest CI results must be reviewed. Phase 02 overall **IN PROGRESS / NOT ACCEPTED**. Merge is **BLOCKED by issue #4** (nested Commercial License and historical import provenance). A passing builder check is not a release approval.
