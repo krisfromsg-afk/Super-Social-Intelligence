@@ -67,6 +67,10 @@ export const auditLogModel = pgTable("AuditLog", {
   action: text().notNull(),
   detail: text(),
   ipAddress: text(),
+  // The existing audit worker writes these fields; both are present in
+  // 20260816085646_audit_log_where_and_index/migration.sql.
+  userAgent: text(),
+  source: text(),
 }, (t) => [
   index("SSI_AuditLog_workspace_created").on(t.workspaceId, t.createdAt),
   index("SSI_AuditLog_workspace_user").on(t.workspaceId, t.userId),
