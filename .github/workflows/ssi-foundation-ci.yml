@@ -22,6 +22,8 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - name: Verify MIT source boundary
+        id: license
+        continue-on-error: true # Collect diagnostics, but fail the job at the final gate.
         shell: bash
         run: |
           test ! -e apps/builder/src/enterprise
@@ -50,3 +52,8 @@ jobs:
         run: pnpm --filter builder check-types
       - name: Build builder
         run: pnpm --filter builder build
+      - name: Enforce SSI licensing stop-ship
+        if: always()
+        run: |
+          echo "License audit result: ${{ steps.license.outcome }}"
+          test "${{ steps.license.outcome }}" = "success"

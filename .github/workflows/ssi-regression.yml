@@ -20,6 +20,8 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - name: License boundary
+        id: license
+        continue-on-error: true # Diagnostics may run, acceptance must still fail.
         run: |
           test ! -e apps/builder/src/enterprise
           test ! -e packages/database/src/schema/enterprise/LICENSE
@@ -40,6 +42,16 @@ jobs:
         if: steps.install.outcome == 'success'
         continue-on-error: true
         run: pnpm --filter builder test
+      - name: SSI conversation service concurrency tests
+        id: business
+        if: steps.install.outcome == 'success'
+        continue-on-error: true
+        run: pnpm --filter @chatbotx.io/business exec vitest run src/conversation/__tests__/conversation.service.test.ts
+      - name: Business TypeScript check
+        id: business_types
+        if: steps.install.outcome == 'success'
+        continue-on-error: true
+        run: pnpm --filter @chatbotx.io/business check-types
       - name: Worker Vitest regression
         id: worker
         if: steps.install.outcome == 'success'
@@ -56,6 +68,12 @@ jobs:
           echo "Builder tests: ${{ steps.builder.outcome }}"
           echo "Worker tests: ${{ steps.worker.outcome }}"
           echo "Worker types: ${{ steps.worker_types.outcome }}"
+          echo "Business concurrency tests: ${{ steps.business.outcome }}"
+          echo "Business types: ${{ steps.business_types.outcome }}"
+          echo "License boundary: ${{ steps.license.outcome }}"
           test "${{ steps.builder.outcome }}" = "success"
           test "${{ steps.worker.outcome }}" = "success"
           test "${{ steps.worker_types.outcome }}" = "success"
+          test "${{ steps.business.outcome }}" = "success"
+          test "${{ steps.business_types.outcome }}" = "success"
+          test "${{ steps.license.outcome }}" = "success"
