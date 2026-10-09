@@ -30,14 +30,26 @@ jobs:
         id: install
         run: pnpm install --frozen-lockfile
       - name: Builder Vitest regression
+        id: builder
         if: steps.install.outcome == 'success'
         continue-on-error: true
         run: pnpm --filter builder test
       - name: Worker Vitest regression
+        id: worker
         if: steps.install.outcome == 'success'
         continue-on-error: true
         run: pnpm --filter worker test
       - name: Worker TypeScript check
+        id: worker_types
         if: steps.install.outcome == 'success'
         continue-on-error: true
         run: pnpm --filter worker check-types
+      - name: Enforce audit test verdict
+        if: always()
+        run: |
+          echo "Builder tests: ${{ steps.builder.outcome }}"
+          echo "Worker tests: ${{ steps.worker.outcome }}"
+          echo "Worker types: ${{ steps.worker_types.outcome }}"
+          test "${{ steps.builder.outcome }}" = "success"
+          test "${{ steps.worker.outcome }}" = "success"
+          test "${{ steps.worker_types.outcome }}" = "success"
