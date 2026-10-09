@@ -1,5 +1,7 @@
 # SSI Phase Status
 
+> **Clean-history branch caveat (2026-10-09):** On `feat/ssi-clean-history-rebuild` the 8 disputed schema files and 6 dependent relation files are absent, and new branch ancestry starts from clean `main`. License/file-boundary test passed in initial CI run 37963197169; targeted Inbox/Human Only tests also passed. However **builder TypeScript failed**, reporting 123 compiler error lines (including cascading dependency errors), because existing business/worker modules still use removed database entities. This checkpoint is **NOT build-ready, NOT merged, NOT license-cleared, and NOT production-safe**. See `CLEAN_REBUILD_NOTE.md` and PR #5. Older CI success statements below refer solely to prior feature branches/checkpoints, not this clean branch.
+
 Updated 2026-10-09.
 
 | Phase | Status | Proof |
