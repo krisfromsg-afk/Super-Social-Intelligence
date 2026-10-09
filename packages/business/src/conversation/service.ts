@@ -1725,12 +1725,14 @@ class ConversationService extends BaseService {
     conversations: { id: string; contactId: string }[]
     userId?: string
     triggerContext: TriggerContext
+    botResumeAt?: Date | null
     tx?: DatabaseClient
   }): Promise<void> {
     await this.updateBotEnabled({
       workspaceId: props.workspaceId,
       ids: props.conversations.map((c) => c.id),
       botEnabled: false,
+      botResumeAt: props.botResumeAt,
       tx: props.tx,
     })
 
@@ -1791,6 +1793,8 @@ class ConversationService extends BaseService {
     botEnabled: boolean
     userId?: string
     triggerContext: TriggerContext
+    /** null disables auto-resume, undefined preserves the existing 24h pause. */
+    botResumeAt?: Date | null
     tx?: DatabaseClient
   }): Promise<void> {
     const { workspaceId, ids, botEnabled, userId, triggerContext, tx } = props
@@ -1810,6 +1814,7 @@ class ConversationService extends BaseService {
         conversations,
         userId,
         triggerContext,
+        botResumeAt: props.botResumeAt,
         tx,
       })
     }

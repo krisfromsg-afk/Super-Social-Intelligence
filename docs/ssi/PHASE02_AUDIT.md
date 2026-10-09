@@ -30,3 +30,7 @@ Audit date: 2026-10-09. Foundation pinned at 2726466929f36855e95e46eb848f0448f1b
 ## Required before production
 
 Vitest suite, database isolation/migration tests, agent human-handoff concurrency tests, Meta/TikTok/Google OAuth tests, webhook signature tests, rate-limit/retry verification, staging deployment, license/secret review, accessibility review.
+
+## Manual Human Only
+
+SSI extends Community bot state to accept `botResumeAt:null`. Since the existing `ensureActive` handler does not auto-resume without a deadline, operator-selected Human Only stays disabled until someone explicitly enables the bot again. The original 24h pause is retained as a separate action. This is not yet the draft-approval Copilot mode.

@@ -3,6 +3,7 @@
 import { BotIcon, UserRoundIcon } from "lucide-react"
 import { useMemo } from "react"
 import type { ConversationResource } from "@/features/conversations/schema/resource"
+import { useThreadControl } from "@/features/conversations/hooks/use-thread-control"
 import { isConversationActive } from "@/features/conversations/utils/bot-state"
 import { useChatStore } from "@/features/chat/store/chat-store-provider"
 
@@ -18,6 +19,10 @@ export function SsiBotActivityPanel({
   conversation: ConversationResource
 }) {
   const messages = useChatStore((state) => state.messages)
+  const activeListConversation = useChatStore((state) =>
+    state.conversations.find((item) => item.id === conversation.id),
+  )
+  const threadState = useThreadControl(activeListConversation)?.state
   const botMessages = useMemo(
     () =>
       messages
@@ -32,7 +37,15 @@ export function SsiBotActivityPanel({
         .reverse(),
     [conversation.id, messages],
   )
-  const active = isConversationActive(conversation)
+  const active = isConversationActive(conversation) && threadState !== "standby"
+  const botStatus =
+    threadState === "standby"
+      ? "Bot on standby (channel handoff)"
+      : active
+        ? "Bot enabled"
+        : conversation.botResumeAt
+          ? "Bot paused (auto-resume scheduled)"
+          : "Human only / bot disabled"
 
   return (
     <section
@@ -49,7 +62,7 @@ export function SsiBotActivityPanel({
           className={active ? "text-emerald-600 dark:text-emerald-400" : "text-muted-foreground"}
           data-testid="ssi-bot-availability"
         >
-          {active ? "Bot enabled" : "Bot paused"}
+          {botStatus}
         </span>
       </div>
       <p className="mt-2 text-muted-foreground text-xs">
@@ -67,7 +80,7 @@ export function SsiBotActivityPanel({
                 className="mt-1 block text-[10px] text-muted-foreground"
                 dateTime={new Date(message.createdAt).toISOString()}
               >
-                {new Date(message.createdAt).toLocaleString()}
+                {new Date(message.createdAt).toISOString().slice(0, 16).replace("T", " ")} UTC
               </time>
             </li>
           ))}

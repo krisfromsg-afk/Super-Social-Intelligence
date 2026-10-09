@@ -13,6 +13,7 @@ import type { ReactNode } from "react"
 import { toast } from "sonner"
 import { ContactInboxPanel } from "../contacts/contact-inbox-panel"
 import { disableBotAction } from "../conversations/actions/disable-bot.action"
+import { keepHumanOnlyAction } from "../conversations/actions/keep-human-only.action"
 import ConversationList from "../conversations/conversation-list"
 import { useThreadControl } from "../conversations/hooks/use-thread-control"
 import { useThreadReadTracking } from "../conversations/hooks/use-thread-read-tracking"
@@ -126,6 +127,25 @@ export function MessageThreadPane({
     },
   )
 
+  const { execute: keepHumanOnly, isExecuting: isKeepingHumanOnly } = useAction(
+    keepHumanOnlyAction.bind(null, workspaceId),
+    {
+      onSuccess: () => {
+        if (activeConversation) {
+          updateConversation(activeConversation.id, {
+            botEnabled: false,
+            botResumeAt: null,
+          })
+        }
+      },
+      onError: ({ error }) => {
+        if (error.serverError) {
+          toast.error(error.serverError)
+        }
+      },
+    },
+  )
+
   return (
     <>
       {isResolvingConversation && (
@@ -137,19 +157,32 @@ export function MessageThreadPane({
           {...threadReadHandlers}
         >
           <MessageHead onBack={onBack} onOpenContact={onOpenContact} />
-          {isConversationActive(activeConversation) && !isThreadOnStandby && (
-            <Button
-              className="shrink-0 rounded-none"
-              disabled={isDisablingBot}
-              onClick={() => {
-                disableBot({ ids: [activeConversation.id] })
-              }}
-              variant="secondary"
-            >
-              <BotIcon />
-              {t("messages.botIsActive")}
-            </Button>
-          )}
+          {!isThreadOnStandby &&
+            (isConversationActive(activeConversation) ||
+              activeConversation.botResumeAt) && (
+              <div className="flex shrink-0 flex-wrap gap-2 border-b px-3 py-2">
+                {isConversationActive(activeConversation) && (
+                  <Button
+                    disabled={isDisablingBot || isKeepingHumanOnly}
+                    onClick={() => disableBot({ ids: [activeConversation.id] })}
+                    size="sm"
+                    variant="secondary"
+                  >
+                    <BotIcon />
+                    Pause bot for 24h
+                  </Button>
+                )}
+                <Button
+                  disabled={isDisablingBot || isKeepingHumanOnly}
+                  onClick={() => keepHumanOnly({ ids: [activeConversation.id] })}
+                  size="sm"
+                  variant="outline"
+                >
+                  <UserRoundIcon />
+                  Human only (no auto-resume)
+                </Button>
+              </div>
+            )}
           <MessageList />
           <MessageInput />
         </div>
