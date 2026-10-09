@@ -162,7 +162,7 @@ describe("POST /v1/webchats", () => {
         data: expect.objectContaining({
           persistentMenus: [
             expect.objectContaining({
-              label: "⚡ Built with chatbotx.io",
+              label: "Built with Super Social Intelligence",
               type: "url",
             }),
           ],
@@ -242,7 +242,7 @@ describe("PATCH /v1/webchats/{id}", () => {
       id: "wc-1",
       data: expect.objectContaining({
         persistentMenus: [
-          expect.objectContaining({ label: "⚡ Built with chatbotx.io" }),
+          expect.objectContaining({ label: "Built with Super Social Intelligence" }),
         ],
       }),
     })

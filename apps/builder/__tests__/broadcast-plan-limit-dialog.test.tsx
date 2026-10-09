@@ -138,18 +138,18 @@ describe("BroadcastPlanLimitDialog", () => {
     expect(onOpenPricing).toHaveBeenCalledTimes(1)
   })
 
-  test("mounts either the short dialog or pricing dialog, and closed renders nothing", () => {
+  test("shows plan limit but never offers an unavailable commercial checkout, and closed renders nothing", () => {
     render(limitState("sendRate", "Trial"))
     expect(
       container.querySelector('[data-testid="short-dialog"]'),
     ).not.toBeNull()
     expect(container.querySelector('[data-testid="pricing-dialog"]')).toBeNull()
 
+    // SSI Community intentionally returns no checkout UI; the proprietary
+    // UpgradePlanDialog is excluded, not mocked into a fake billing surface.
     render({ step: "pricing" })
     expect(container.querySelector('[data-testid="short-dialog"]')).toBeNull()
-    expect(
-      container.querySelector('[data-testid="pricing-dialog"]'),
-    ).not.toBeNull()
+    expect(container.querySelector('[data-testid="pricing-dialog"]')).toBeNull()
 
     render({ step: "closed" })
     expect(container.childElementCount).toBe(0)

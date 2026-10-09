@@ -843,9 +843,10 @@ describe("public API spec — error response coverage", () => {
   // exact set so a new one is a deliberate, reviewed addition, not a
   // silent trap for callers of a client that regresses this fix.
   //
-  // `contacts.removeTags` (`tagIds`), `contacts.unsubscribeSequences`
-  // (`sequenceIds`), and `inboxTeams.removeMembers` (`userIds`) each remove
-  // a caller-chosen subset of a collection. `keywords.delete` (`type`,
+  // `contacts.removeTags` (`tagIds`) and `contacts.unsubscribeSequences`
+  // (`sequenceIds`) each remove a caller-chosen subset of a collection.
+  // The proprietary inboxTeams endpoint is intentionally not in SSI Community.
+  // `keywords.delete` (`type`,
   // defaulted to "inbound") and `messages.delete` (`createdAt`, required to
   // locate a message in sharded storage — the comment in
   // `messages/schema/public.ts` claiming DELETE maps this to a query
@@ -863,7 +864,6 @@ describe("public API spec — error response coverage", () => {
     expect(deletesWithBody).toEqual([
       "contacts.removeTags",
       "contacts.unsubscribeSequences",
-      "inboxTeams.removeMembers",
       "keywords.delete",
       "messages.delete",
     ])

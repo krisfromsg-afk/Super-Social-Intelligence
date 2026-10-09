@@ -1,6 +1,6 @@
 // @vitest-environment node
 
-import { readdirSync, readFileSync, statSync } from "node:fs"
+import { existsSync, readdirSync, readFileSync, statSync } from "node:fs"
 import { join, relative } from "node:path"
 import { describe, expect, test } from "vitest"
 
@@ -50,10 +50,10 @@ describe("public router boundary", () => {
   // public.ts never being wired in, or public.ts's import being
   // deleted/renamed without removing the source file.
   test("every features/**/api/public.ts file is registered — directly in routers/public.ts, or composed into a file that is", () => {
-    const publicApiFiles = [
-      ...collectPublicApiFiles(join(SRC_ROOT, "features")),
-      ...collectPublicApiFiles(join(SRC_ROOT, "enterprise")),
-    ]
+    // Commercial Enterprise source is not shipped in the SSI Community tree.
+    // Enforce the license boundary instead of trying to scan a forbidden path.
+    expect(existsSync(join(SRC_ROOT, "enterprise"))).toBe(false)
+    const publicApiFiles = collectPublicApiFiles(join(SRC_ROOT, "features"))
 
     expect(publicApiFiles.length).toBeGreaterThan(0)
 

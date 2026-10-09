@@ -85,6 +85,7 @@
     "conversations/disable-live-chat-conversation.action:disableLiveChatConversationAction": "covered:conversations",
     "conversations/enable-bot.action:enableBotAction": "covered:conversations",
     "conversations/enable-live-chat-conversation.action:enableLiveChatConversationAction": "covered:conversations",
+    "conversations/keep-human-only.action:keepHumanOnlyAction": "private:workspace-authenticated takeover; public API requires separate permission and abuse review",
     "conversations/follow-conversation.action:followConversationAction": "covered:conversations",
     "conversations/read-conversation.action:readConversationAction": "covered:conversations",
     "conversations/sync-thread-owner.action:syncThreadOwnerAction": "covered:conversations",
