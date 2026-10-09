@@ -29,8 +29,6 @@ jobs:
           grep -q 'Copyright (c) 2024-present AhaChat LLC' LICENSE
           test -f packages/ai/package.json
       - uses: pnpm/action-setup@v4
-        with:
-          version: 10.34.5
       - uses: actions/setup-node@v4
         with:
           node-version: 24
