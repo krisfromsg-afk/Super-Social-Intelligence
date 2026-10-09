@@ -1,0 +1,45 @@
+name: SSI Community Source Import
+
+on:
+  push:
+    branches:
+      - feat/ssi-foundation-rebrand
+    paths:
+      - .github/workflows/import-community.yml
+      - scripts/ssi/import-community.sh
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: ssi-community-import
+  cancel-in-progress: false
+
+jobs:
+  import:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: feat/ssi-foundation-rebrand
+          persist-credentials: true
+      - name: Check provenance boundary
+        run: |
+          test -f docs/ssi/UPSTREAM_POLICY.md
+          test ! -e apps/builder/src/enterprise
+      - name: Install rsync
+        run: |
+          command -v rsync
+      - name: Import allowed source snapshot
+        env:
+          UPSTREAM_SHA: f1ca4a8f74cc08ca68d601ba2ce0e58bd9c5e67c
+        run: bash scripts/ssi/import-community.sh
+      - name: Verify repository tree
+        run: |
+          test ! -e apps/builder/src/enterprise
+          test -f packages/ai/package.json
+          test -f apps/builder/package.json
+          test -f LICENSE
+          if git ls-files | grep -E '^apps/builder/src/enterprise(/|$)'; then exit 1; fi

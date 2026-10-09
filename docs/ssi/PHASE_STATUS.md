@@ -1,0 +1,26 @@
+# SSI Phase Status
+
+Updated 2026-10-09.
+
+| Phase | Status | Proof |
+|---|---|---|
+| 00A: initialize repo/feature branch | DONE | GitHub branch `feat/ssi-foundation-rebrand` |
+| 00B: product and licensing plan | IN PROGRESS | This branch: MASTER_PLAN, RAG_ARCHITECTURE, UPSTREAM_POLICY |
+| 00C: pinned Community source import | NOT YET VERIFIED | `.github/workflows/import-community.yml` must run successfully |
+| 00D: baseline build and licensing dependency repair | NOT STARTED | Run package, typecheck, lint, tests, build |
+| 01: SSI rebrand | NOT STARTED | No claim of product-wide brand changes |
+| 02: omnichannel inbox modernization | NOT STARTED | N/A |
+| 03: AI Personality Studio | NOT STARTED | N/A |
+| 04: Smart RAG and Drive/Docs/Sheets | NOT STARTED | Architecture only |
+| 05: tenancy/security/production | NOT STARTED | N/A |
+| 06: analytics/mobile/publishing | NOT STARTED | N/A |
+
+No live OAuth credentials or platform API test accounts have been supplied.
+
+## Next exact engineering sequence
+
+1. GitHub Actions completes license-filtered source import.
+2. Inspect imported tree for forbidden enterprise code and references; document violations.
+3. Fix imports and build without proprietary content.
+4. Ship SSI brand constants and layout, then gradually migrate namespaces.
+5. Add integration tests and small PRs for inbox, persona, RAG ingestion and Google sync.
