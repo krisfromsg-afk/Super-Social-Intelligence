@@ -1,4 +1,3 @@
-import { inboxTeamsPublicRouter } from "@/enterprise/features/inbox-teams/api/public"
 import { adsPublicRouter } from "@/features/ads/api/public"
 import { aiAgentsPublicRouter } from "@/features/ai-agents/api/public"
 import { aiFilesPublicRouter } from "@/features/ai-files/api/public"
@@ -133,7 +132,6 @@ export const publicRouter = {
     ...createCapiRoutes("instagram"),
     ...instagramChannelsPublicRouter,
   },
-  inboxTeams: inboxTeamsPublicRouter,
   inboxes: inboxesPublicRouter,
   integrations: integrationsPublicRouter,
   keywords: keywordsPublicRouter,

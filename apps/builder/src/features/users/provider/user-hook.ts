@@ -18,17 +18,14 @@ export const useWorkspaceMembers = (
     }),
   )
 
+/** Team assignment is unavailable in MIT Community until SSI builds its own. */
 export const useInboxTeams = (
-  workspaceId: string | undefined,
-  options?: { enabled?: boolean },
-) =>
-  useQuery(
-    orpc.inboxTeamsAPI.listInboxTeamsAuthenticatedAPI.queryOptions({
-      input: { workspaceId: workspaceId ?? "" },
-      enabled: Boolean(workspaceId) && (options?.enabled ?? true),
-      select: (res) => res.data,
-    }),
-  )
+  _workspaceId: string | undefined,
+  _options?: { enabled?: boolean },
+): { data: Array<{ id: string; name: string }>; isPending: boolean } => ({
+  data: [],
+  isPending: false,
+})
 
 export const useInvalidateUsers = () => {
   const queryClient = useQueryClient()
@@ -39,9 +36,6 @@ export const useInvalidateUsers = () => {
         queryClient.invalidateQueries({
           queryKey:
             orpc.workspaceMembersAPI.listWorkspaceMembersAuthenticatedAPI.key(),
-        }),
-        queryClient.invalidateQueries({
-          queryKey: orpc.inboxTeamsAPI.listInboxTeamsAuthenticatedAPI.key(),
         }),
       ]),
     [queryClient],

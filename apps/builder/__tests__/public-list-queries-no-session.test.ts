@@ -272,14 +272,6 @@ describe("public list queries never depend on a session", () => {
     expect(mocks.assertCurrentUserCanAccessChatbot).not.toHaveBeenCalled()
   })
 
-  test("listInboxTeams resolves without a session", async () => {
-    const { listInboxTeams } = await import(
-      "../src/enterprise/features/inbox-teams/queries"
-    )
-    await expect(listInboxTeams({ workspaceId: "ws-1" })).resolves.toBeDefined()
-    expect(mocks.assertCurrentUserCanAccessChatbot).not.toHaveBeenCalled()
-  })
-
   test("listConversations resolves without a session", async () => {
     const { listConversations } = await import(
       "../src/features/conversations/queries/list-conversations.query"

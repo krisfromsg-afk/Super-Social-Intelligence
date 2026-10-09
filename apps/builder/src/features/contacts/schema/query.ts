@@ -5,7 +5,7 @@ import {
 } from "@chatbotx.io/database/partials"
 import { zodBigintAsString } from "@chatbotx.io/utils"
 import z from "zod"
-import { inboxTeamResource } from "@/enterprise/features/inbox-teams/schema/resource"
+import { inboxTeamResource } from "@/features/ssi-community/inbox-team-resource"
 import { contactFilterCriteriaSchema } from "@/features/contact-filter/schema"
 import { contactInboxResource } from "@/features/contact-inboxes/schema/resource"
 import { conversationResource } from "@/features/conversations/schema/resource"

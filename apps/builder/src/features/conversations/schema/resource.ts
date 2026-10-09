@@ -8,7 +8,7 @@ import {
 } from "@chatbotx.io/database/schema"
 import { zodBigintAsString } from "@chatbotx.io/utils"
 import z from "zod"
-import { inboxTeamResource } from "@/enterprise/features/inbox-teams/schema/resource"
+import { inboxTeamResource } from "@/features/ssi-community/inbox-team-resource"
 import { contactInboxResource } from "@/features/contact-inboxes/schema/resource"
 import { contactResource } from "@/features/contacts/schema/resource"
 import { messageResourceWithRelations } from "@/features/messages/schema/resource"

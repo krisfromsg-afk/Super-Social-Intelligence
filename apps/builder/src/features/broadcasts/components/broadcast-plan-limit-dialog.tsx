@@ -12,7 +12,7 @@ import {
 } from "@chatbotx.io/ui/components/ui/dialog"
 import { TriangleAlertIcon } from "lucide-react"
 import { useTranslations } from "next-intl"
-import { UpgradePlanDialog } from "@/enterprise/features/billing/upgrade-plan-dialog"
+import { UpgradePlanDialog } from "@/features/ssi-community/upgrade-unavailable"
 import type { BroadcastPlanLimitStep } from "../hooks/use-broadcast-plan-limit"
 
 const descriptionKeyByReason = {
