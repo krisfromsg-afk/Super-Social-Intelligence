@@ -1,5 +1,5 @@
 {
-  "name": "chatbotx-monorepo",
+  "name": "super-social-intelligence",
   "private": true,
   "scripts": {
     "build": "turbo build",

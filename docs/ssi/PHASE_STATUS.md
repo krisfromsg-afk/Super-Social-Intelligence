@@ -5,10 +5,10 @@ Updated 2026-10-09.
 | Phase | Status | Proof |
 |---|---|---|
 | 00A: initialize repo/feature branch | DONE | GitHub branch `feat/ssi-foundation-rebrand` |
-| 00B: product and licensing plan | IN PROGRESS | This branch: MASTER_PLAN, RAG_ARCHITECTURE, UPSTREAM_POLICY |
+| 00B: product and licensing plan | DONE | This branch: MASTER_PLAN, RAG_ARCHITECTURE, UPSTREAM_POLICY |
 | 00C: pinned Community source import | NOT YET VERIFIED | `.github/workflows/import-community.yml` must run successfully |
 | 00D: baseline build and licensing dependency repair | NOT STARTED | Run package, typecheck, lint, tests, build |
-| 01: SSI rebrand | NOT STARTED | No claim of product-wide brand changes |
+| 01: SSI rebrand | IN PROGRESS | Default product name, wordmark assets, web manifest, attribution |
 | 02: omnichannel inbox modernization | NOT STARTED | N/A |
 | 03: AI Personality Studio | NOT STARTED | N/A |
 | 04: Smart RAG and Drive/Docs/Sheets | NOT STARTED | Architecture only |
