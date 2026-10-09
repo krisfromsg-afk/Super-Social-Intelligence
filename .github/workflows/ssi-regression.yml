@@ -1,0 +1,43 @@
+name: SSI Broad Regression Audit
+
+on:
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - 'apps/**'
+      - 'packages/**'
+      - 'integrations/**'
+      - '.github/workflows/ssi-regression.yml'
+      - 'pnpm-lock.yaml'
+
+permissions:
+  contents: read
+
+jobs:
+  integration-audit:
+    runs-on: ubuntu-latest
+    timeout-minutes: 55
+    steps:
+      - uses: actions/checkout@v4
+      - name: License boundary
+        run: test ! -e apps/builder/src/enterprise
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: pnpm
+      - name: Install pinned dependencies
+        id: install
+        run: pnpm install --frozen-lockfile
+      - name: Builder Vitest regression
+        if: steps.install.outcome == 'success'
+        continue-on-error: true
+        run: pnpm --filter builder test
+      - name: Worker Vitest regression
+        if: steps.install.outcome == 'success'
+        continue-on-error: true
+        run: pnpm --filter worker test
+      - name: Worker TypeScript check
+        if: steps.install.outcome == 'success'
+        continue-on-error: true
+        run: pnpm --filter worker check-types
