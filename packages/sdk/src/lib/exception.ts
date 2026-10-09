@@ -1,0 +1,124 @@
+import type { ParsedError } from "./schemas"
+
+export const UNKNOWN_ERROR: ParsedError = {
+  message: "Unknown error.",
+  code: -1,
+  statusCode: -1,
+  subcode: -1,
+  type: "unknown",
+}
+
+export class SdkException extends Error {
+  code: string | number
+  httpStatusCode: number
+  subCode?: string | number | null
+  originError?: Error
+  type?: string
+  category?: string
+  isRetryable?: boolean
+  isPermanent?: boolean
+
+  constructor(
+    message: string,
+    code: string | number = UNKNOWN_ERROR.code,
+    httpStatusCode = 400,
+    subCode: string | number | null = null,
+    type?: string,
+  ) {
+    super(message)
+
+    this.name = this.constructor.name
+    this.code = code
+    this.httpStatusCode = httpStatusCode
+    this.subCode = subCode
+    this.type = type
+
+    if (Error.captureStackTrace) {
+      Error.captureStackTrace(this, SdkException)
+    }
+  }
+
+  static methodNotImplemented() {
+    return new SdkException("Method is not implemented")
+  }
+
+  setOriginError(originError: Error | unknown) {
+    this.originError = originError as Error
+
+    return this
+  }
+
+  async getErrorData(): Promise<ParsedError> {
+    return await Promise.resolve({
+      message: this.message || UNKNOWN_ERROR.message,
+      type: this.type,
+      code: this.code ?? UNKNOWN_ERROR.code,
+      statusCode: this.httpStatusCode ?? UNKNOWN_ERROR.statusCode,
+      subcode: this.subCode ?? UNKNOWN_ERROR.subcode,
+      category: this.category,
+      isRetryable: this.isRetryable,
+      isPermanent: this.isPermanent,
+    })
+  }
+
+  getOriginError() {
+    return this.originError
+  }
+}
+
+export class IntegrationException extends SdkException {}
+
+export class AuthException extends SdkException {}
+
+/** A provider explicitly rejected supplied credentials or an OAuth request. */
+export class ConnectionProviderRejectedError extends SdkException {
+  /**
+   * Stable, provider-specific reason (a `ConnectFailureCause`) the caller can
+   * translate; the `message` is English-only and not for display.
+   */
+  readonly failureCause?: string
+
+  constructor(
+    message: string,
+    originError?: Error | unknown,
+    failureCause?: string,
+  ) {
+    super(message, "connectionProviderRejected", 400)
+    this.failureCause = failureCause
+    if (originError) {
+      this.setOriginError(originError)
+    }
+  }
+}
+
+/**
+ * Wraps an OAuth2 token-refresh failure after its refresh attempt finishes.
+ *
+ * When `originError` is an {@link AuthException}, the failure is terminal
+ * (for example, a revoked refresh token) and the SDK marks the connection
+ * offline. Other origins represent exhausted transient retries; callers may
+ * retry them later and must not require reconnection.
+ */
+export class AuthRefreshException extends SdkException {
+  constructor(message: string, originError?: Error | unknown) {
+    super(message, UNKNOWN_ERROR.code, 401)
+    if (originError) {
+      this.setOriginError(originError)
+    }
+  }
+}
+
+/**
+ * Duck-typed 401 check shared by every REST-based marketing-integration
+ * provider's `isRevokedTokenError`/`verify` catch (Mailchimp, Klaviyo,
+ * MailerLite, SendGrid, Drip, ActiveCampaign, GetResponse). Each provider's
+ * own API error class (`MailchimpApiError`, `DripApiError`, …) carries its
+ * own `statusCode` field rather than sharing one common base, so this checks
+ * the shape, not a specific class — `error instanceof X` would need one
+ * import per provider for the exact same two-line check.
+ */
+export const isUnauthorizedStatusError = (error: unknown): boolean =>
+  typeof error === "object" &&
+  error !== null &&
+  "statusCode" in error &&
+  error.statusCode === 401
