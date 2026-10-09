@@ -45,7 +45,7 @@ test ! -e packages/database/src/relations/enterprise
 
 # Hard fail on unexpected nested commercial licenses. Never delete only a LICENSE
 # while preserving the contents it governs.
-if find apps packages integrations -type f \\( -iname 'LICENSE' -o -iname 'LICENSE.*' -o -iname 'NOTICE' -o -iname 'NOTICE.*' \\) -print0 | xargs -0 -r grep -il 'ChatbotX Commercial License' | grep -q .; then
+if find apps packages integrations -type f \( -iname 'LICENSE' -o -iname 'LICENSE.*' -o -iname 'NOTICE' -o -iname 'NOTICE.*' \) -print0 | xargs -0 -r grep -il 'ChatbotX Commercial License' | grep -q .; then
   echo 'STOP-SHIP: nested commercial licensing needs review' >&2
   exit 1
 fi
