@@ -1846,18 +1846,65 @@ class ConversationService extends BaseService {
       return false
     }
 
-    await this.enableBotState({
+    // The worker may have read an expired pause just BEFORE an operator
+    // switched to permanent Human Only. Compare-and-swap on the exact pause
+    // deadline so this stale worker cannot re-enable automation.
+    const client = tx ?? db
+    const [claimed] = await client
+      .update(conversationModel)
+      .set({ botEnabled: true, botResumeAt: null })
+      .where(
+        and(
+          eq(conversationModel.id, conversation.id),
+          eq(conversationModel.workspaceId, conversation.workspaceId),
+          eq(conversationModel.botEnabled, false),
+          eq(conversationModel.botResumeAt, conversation.botResumeAt),
+          lt(conversationModel.botResumeAt, new Date()),
+        ),
+      )
+      .returning({ id: conversationModel.id })
+
+    if (!claimed) {
+      // False if Human Only won; true if another explicit operation already
+      // re-enabled the bot. Never trust the caller's stale snapshot.
+      const current = await client.query.conversationModel.findFirst({
+        where: { id: conversation.id, workspaceId: conversation.workspaceId },
+        columns: { botEnabled: true },
+      })
+      return current?.botEnabled === true
+    }
+
+    await this.invalidate({
       workspaceId: conversation.workspaceId,
-      conversations: [
-        { id: conversation.id, contactId: conversation.contactId },
-      ],
-      triggerContext: {
-        triggerSource: "system",
-        triggerHandler: "ensureActive",
-        triggerType: "bot_auto_resume",
-      },
-      tx,
+      ids: [conversation.id],
     })
+    await emitConversationTransferredToBot(
+      conversation.workspaceId,
+      conversation.contactId,
+      conversation.id,
+    )
+    emit("analytics:dashboard", {
+      eventType: "conversation:transferred_to_bot",
+      workspaceId: conversation.workspaceId,
+      conversationId: conversation.id,
+      occurredAt: new Date(),
+      metadata: {
+        triggerContext: {
+          triggerSource: "system",
+          triggerHandler: "ensureActive",
+          triggerType: "bot_auto_resume",
+        },
+      },
+    })
+    if (!tx) {
+      publishToWorkspaceParty(conversation.workspaceId, {
+        eventType: RealtimeEventType.conversationUpdated,
+        data: {
+          conversationIds: [conversation.id],
+          changes: { botEnabled: true, botResumeAt: null },
+        },
+      })
+    }
 
     return true
   }

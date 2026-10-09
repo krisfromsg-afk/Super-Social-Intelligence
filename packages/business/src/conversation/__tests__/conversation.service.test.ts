@@ -59,6 +59,7 @@ vi.mock("@chatbotx.io/database/client", () => ({
   and: (...args: unknown[]) => ({ and: args }),
   eq: (a: unknown, b: unknown) => ({ eq: [a, b] }),
   inArray: (col: unknown, vals: unknown) => ({ inArray: [col, vals] }),
+  lt: (col: unknown, val: unknown) => ({ lt: [col, val] }),
   sql: mocks.sql,
 }))
 
@@ -168,8 +169,11 @@ vi.mock("../../smart-delay/service", () => ({
 
 const { conversationService } = await import("../service")
 const { emit } = await import("@chatbotx.io/event-bus")
-const { emitConversationAssigned, emitConversationTransferredToHuman } =
-  await import("@chatbotx.io/events")
+const {
+  emitConversationAssigned,
+  emitConversationTransferredToHuman,
+  emitConversationTransferredToBot,
+} = await import("@chatbotx.io/events")
 const { invalidateCacheByTags } = await import("@chatbotx.io/redis")
 const { notificationQueue } = await import("@chatbotx.io/worker-config")
 
@@ -204,6 +208,7 @@ beforeEach(() => {
   mocks.cancelQuickReplyFollowUps.mockReset()
   mocks.cancelQuickReplyFollowUps.mockResolvedValue(undefined)
   vi.mocked(emitConversationTransferredToHuman).mockReset()
+  vi.mocked(emitConversationTransferredToBot).mockReset()
   mocks.sql.mockClear()
 })
 
@@ -1215,5 +1220,80 @@ describe("ConversationService.updateBotEnabled quick-reply follow-up cancel", ()
       expect.objectContaining({ tx: savepoint }),
     )
     expect(invalidateCacheByTags).toHaveBeenCalled()
+  })
+})
+
+describe("ConversationService.ensureActive manual-takeover race", () => {
+  const expiredPause = new Date("2026-10-08T10:00:00.000Z")
+  const stale = {
+    id: "conv-1",
+    workspaceId: WORKSPACE_ID,
+    contactId: "contact-1",
+    botEnabled: false,
+    botResumeAt: expiredPause,
+  }
+
+  test("auto-resume must compare the original deadline before enabling", async () => {
+    mocks.updateReturning.mockResolvedValueOnce([{ id: stale.id }])
+
+    await expect(conversationService.ensureActive(stale)).resolves.toBe(true)
+
+    expect(mocks.updateSet).toHaveBeenCalledWith({
+      botEnabled: true,
+      botResumeAt: null,
+    })
+    const condition = mocks.updateWhere.mock.calls.at(-1)?.[0] as {
+      and: unknown[]
+    }
+    expect(condition.and).toEqual(
+      expect.arrayContaining([
+        { eq: [undefined, stale.id] },
+        { eq: [undefined, WORKSPACE_ID] },
+        { eq: [undefined, false] },
+        { eq: [undefined, expiredPause] },
+      ]),
+    )
+    expect(condition.and.some((entry) => "lt" in (entry as object))).toBe(true)
+    expect(emitConversationTransferredToBot).toHaveBeenCalledTimes(1)
+    expect(mocks.broadcastToWorkspaceParty).toHaveBeenCalledWith(
+      WORKSPACE_ID,
+      expect.objectContaining({
+        eventType: "conversationUpdated",
+        data: {
+          conversationIds: [stale.id],
+          changes: { botEnabled: true, botResumeAt: null },
+        },
+      }),
+    )
+  })
+
+  test("never resumes or emits when an operator's Human Only update won", async () => {
+    mocks.updateReturning.mockResolvedValueOnce([])
+    mocks.conversationFindFirst.mockResolvedValueOnce({ botEnabled: false })
+
+    await expect(conversationService.ensureActive(stale)).resolves.toBe(false)
+
+    expect(mocks.conversationFindFirst).toHaveBeenCalledWith({
+      where: { id: stale.id, workspaceId: WORKSPACE_ID },
+      columns: { botEnabled: true },
+    })
+    expect(emitConversationTransferredToBot).not.toHaveBeenCalled()
+    expect(mocks.broadcastToWorkspaceParty).not.toHaveBeenCalled()
+  })
+
+  test("returns true without duplicate emit if a human already re-enabled", async () => {
+    mocks.updateReturning.mockResolvedValueOnce([])
+    mocks.conversationFindFirst.mockResolvedValueOnce({ botEnabled: true })
+
+    await expect(conversationService.ensureActive(stale)).resolves.toBe(true)
+
+    expect(emitConversationTransferredToBot).not.toHaveBeenCalled()
+  })
+
+  test("permanent Human Only never reaches the write path", async () => {
+    await expect(
+      conversationService.ensureActive({ ...stale, botResumeAt: null }),
+    ).resolves.toBe(false)
+    expect(mocks.updateSet).not.toHaveBeenCalled()
   })
 })
