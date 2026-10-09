@@ -1,16 +1,11 @@
 name: SSI Community Source Import
 
+# Explicit manual audit only: never auto-reimport unreviewed upstream code.
 on:
-  push:
-    branches:
-      - feat/ssi-foundation-rebrand
-    paths:
-      - .github/workflows/import-community.yml
-      - scripts/ssi/import-community.sh
   workflow_dispatch:
 
 permissions:
-  contents: write
+  contents: read
 
 concurrency:
   group: ssi-community-import
@@ -23,7 +18,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
-          ref: feat/ssi-foundation-rebrand
+          ref: feat/ssi-clean-history-rebuild
           persist-credentials: true
       - name: Check provenance boundary
         run: |
@@ -34,7 +29,7 @@ jobs:
       - name: Install rsync
         run: |
           command -v rsync
-      - name: Import allowed source snapshot
+      - name: Import allowed source snapshot (intentionally gated)
         env:
           UPSTREAM_SHA: f1ca4a8f74cc08ca68d601ba2ce0e58bd9c5e67c
         run: bash scripts/ssi/import-community.sh
