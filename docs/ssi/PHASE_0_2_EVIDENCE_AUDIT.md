@@ -42,3 +42,7 @@
 2. Phase 1: favicon/marketing/legal/i18n sweep, reproducible infra/staging login/worker, PostgreSQL migration/backfill, schema isolation, rollback.
 3. Phase 2: P2.3–P2.6 data model, backend gate, draft lifecycle, secured traces; P2.7–P2.9 actual channels, tenant security, concurrency and browser E2E.
 4. Run strict audit and live acceptance. Only mark Phase 0–1–2 DONE and merge the corresponding code when all required gates pass. Do not interpret green build as readiness.
+
+## Executed source audit
+
+On commit `37b724bc2076c4e1511c94b519ff9c1d13824a3b`, the executable script ran in [GitHub Actions #38026788971](https://github.com/krisfromsg-afk/Super-Social-Intelligence/actions/runs/38026788971). The checkpoint job succeeded, proving source witness integrity, forbidden-path ancestry and deterministic report generation. Its JSON artifact reports **3 verified, 7 partial, 8 blocked, 0 invariant violations**. The separate strict gate intentionally returns a nonzero exit code until all items are accepted. This is an acceptance failure, **not** a failing TypeScript build.

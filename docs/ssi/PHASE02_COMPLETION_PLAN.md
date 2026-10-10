@@ -1,55 +1,42 @@
 # SSI Phase 02 — Completion, Acceptance & Release Plan
 
-Updated: 2026-10-09. Source of truth: issue #3; legal STOP-SHIP: issue #4.
-Status: **IN PROGRESS — NOT ACCEPTED — NOT MERGED**.
-Dependency: Phase 00/01 Foundation, PR #1; ongoing work PR #2.
+Updated: **2026-10-10**. **Source of truth:** [issue #3](https://github.com/krisfromsg-afk/Super-Social-Intelligence/issues/3). **Legal STOP-SHIP:** [issue #4](https://github.com/krisfromsg-afk/Super-Social-Intelligence/issues/4). **Code:** canonical [draft PR #5](https://github.com/krisfromsg-afk/Super-Social-Intelligence/pull/5), NOT old closed PR #1 or PR #2.
 
-## Product outcome and definition of done
+**Status: PARTIALLY IMPLEMENTED, NOT ACCEPTED, NOT MERGED.** Foundation and broad source CI pass, but there is not yet a production-safe three-state AI ownership and approval system.
 
-A nontechnical Spider Hubs workspace can connect authorized channel accounts, see real inbound/outbound messages in one mobile-friendly Inbox, identify the REAL sender and verified AI/model activity, seamlessly switch Human Only / Copilot / Autopilot, review AI drafts, inspect source/tool evidence, and stop automation immediately. Every event is tenant-scoped, deduplicated and auditable; no private user login hacks or unverified channel claims.
+## User-visible outcome
 
-All phases below require implemented code, tests, API permission checks, a clear changelog and reviewed CI. Green frontend build alone is NOT acceptance.
+A workspace operator can connect authorized accounts, see actual inbound/outbound conversations and reliably distinguish human, generic automated bot, API and system output. Full release must also prove the real generative-AI source, permit Human Only / Copilot draft approval / Autopilot dispatch under a single server policy, reveal authorized model/tool/retrieval metadata and reject stale/replayed jobs after takeover.
 
-## Workstreams and checkpoints
+## Workstream acceptance ledger
 
-| ID | Priority | Scope | Observable acceptance | Current status |
-|---|---|---|---|---|
-| P2.0 | P0 | Community Inbox baseline and server/mobile architecture | Existing 3-pane real-time inbox remains usable | Inherited, foundation build passed earlier |
-| P2.1 | P0 | Sender attribution and activity | Accurate outbound Bot/Human/API/System tags; only real loaded bot activity shown | Implemented; NOT equivalent to LLM attribution |
-| P2.2 | P0 | Manual handoff | Explicit indefinite Human Only, temporary 24h pause, ability to re-enable, cross-tab sync, guarded expired-pause CAS | Code committed; focused tests; full race/E2E not signed off |
-| P2.3 | P0 | Provenance model | Durable message-to-agent-run relation, identify deterministic flow vs model response; true delivery status, no inferred AI identity | NOT IMPLEMENTED |
-| P2.4 | P0 | Three-state send policy | Persistent per-conversation Human Only / Copilot / Autopilot mode; single server-side enforcement gate in every dispatcher; atomic ownership | NOT IMPLEMENTED |
-| P2.5 | P0 | Approval queue | Agent creates versioned drafts; human approve/edit/reject; sent once using idempotent outbox; stale drafts invalidated | NOT IMPLEMENTED |
-| P2.6 | P0 | Trace viewer | Authenticated, tenant/collection-scoped model/tool/retrieval metadata for actual delivered message; no raw secrets or hidden chain-of-thought | NOT IMPLEMENTED |
-| P2.7 | P0 | Channel contracts | OAuth scope, webhook signature, replay protection, rate-limit, retries, messaging window, account mapping fixtures | NOT FULLY VERIFIED |
-| P2.8 | P1 | Inbox polish | Channel/account/workspace filters; keyboard/a11y, responsive layout, i18n en/vi, loading/errors, empty states | PARTIAL |
-| P2.9 | P0 | Regression and security gate | Build/types/lint, builder/business/worker tests, database isolation, concurrency and E2E; canary rollback; licensing clearance | BLOCKED |
+| ID | Status | Delivered | Required to finish |
+| --- | --- | --- | --- |
+| P2.0 Community Inbox baseline | PARTIAL | Imported three-pane Inbox, real-time and filters | Desktop/mobile E2E and operational acceptance |
+| P2.1 Source badges/activity | SOURCE VERIFIED | Bot/Human/API/System outgoing attribution and recent real loaded bot messages | Do not infer flow vs LLM from senderType=bot |
+| P2.2 Human handoff | PARTIAL | Indefinite Human Only + re-enable, temporary pause, cross-tab and CAS tests | Cross-dispatcher atomic send-guard and concurrent queue/live E2E |
+| P2.3 Durable LLM/flow provenance | BLOCKED | No accepted per-message lineage | Persist flow/agent/model attribution and source IDs tied to actual delivery |
+| P2.4 Three-state server policy | BLOCKED | No SSI-owned Human/Copilot/Autopilot persistence | Server-authoritative versioned mode and send claims in every dispatcher |
+| P2.5 Approval queue | BLOCKED | No accepted AI draft lifecycle | Versioned draft edit/approve/reject, expiring claim and idempotent outbox |
+| P2.6 Agent/source trace viewer | BLOCKED | Activity panel specifically does not claim traces | Workspace-scoped safe model/tool/retrieval metadata and authorization tests |
+| P2.7 Channel contracts | PARTIAL | Community adapters with many unit fixtures | SSI OAuth/scope, webhook/replay, rate-limit, messaging window, live credential matrix |
+| P2.8 Inbox polish | PARTIAL | Basic UI and filters | Keyboard/a11y, responsive, state, loading, en/vi review |
+| P2.9 Regression/security gate | BLOCKED | Builder/worker/business CI and schema-drift checks pass | Postgres migrations, multi-tenant E2E, real dispatcher races, staging/canary rollback |
 
-## Architecture contracts for new work
+## Mandatory invariant tests before changing these statuses
 
-1. **Store durable provenance without fabricated reasoning:** `AgentRun` / message mapping should persist `workspaceId`, `conversationId`, `messageId`, run type (flow/model/tool), status, model identifier, tool names, authorized source IDs, latency/cost and timestamps. Only expose scoped, redacted metadata; do not persist or expose hidden chain-of-thought.
-2. **Mode transition is server authority:** `HumanOnly` means no automated outbound; `Copilot` may create suggestions but NEVER silently dispatches; `Autopilot` can auto-send only after policy approval, channel restrictions and a final atomic ownership check.
-3. **Concurrency:** state changes and outbound send claims must be conditional on the latest persisted mode/version, with unique message/outbox idempotency keys. Prevent an existing queued worker from sending after human takeover; the current expired-pause CAS is only one part of this guarantee.
-4. **Draft lifecycle:** `pending → approved → sending → sent` or `rejected | expired | failed`; approval is idempotent, tied to actor and version. Re-approval may not duplicate dispatch.
-5. **Multi-tenant:** every query/write joins or filters `workspaceId`, actor authorization, source collection permission and channel identity. Never trust client-provided source/run IDs alone.
-6. **Channels:** adapters remain official API implementations and enforce per-channel permissions and messaging windows at send time; no fake confirmed connectivity.
-7. **Migration safety:** additive Drizzle schema/migration with rollback, schema drift checks and review; no production migration without authorized deployment gate.
-8. **No proprietary imports:** pin Community upstream, review nested LICENSE scope and re-create required features with original implementation, retaining attribution. Do not silently drop license notices.
+1. Human Only: no automated outbound on any worker/flow/AI path, including a queued job created before takeover or an expired temporary pause racing a manual override.
+2. Copilot: AI may **only draft**; explicit authorized human approve/edit/reject is required for any send. Concurrent approvals dispatch once; stale/expired draft cannot send.
+3. Autopilot: send only when final mode/version/outbox claim, tenant authorization and channel policy all agree. Duplicate webhooks/retries do not create additional deliveries.
+4. Provenance: deterministic flow is never mislabeled as an LLM. Trace API links only to stored real runs/sent messages and redacts secrets/internal chain-of-thought.
+5. Real providers: OAuth channel/account scopes, signed webhooks, rate limits, retries and messaging windows are verified in provider-specific fixtures and authorized staging.
+6. Mobile/web acceptance, real PostgreSQL migration safety, workspace isolation and rollback are tested with recorded commands/results.
+7. Legal clearance for the exact final tree, attribution and public history is documented before any production release.
 
-## Required acceptance tests
+## Evidence and merge order
 
-- Operator pauses 24h in tab A; tab B displays correct pause deadline, automatic resume only at proper time, operator can re-enable explicitly.
-- Operator selects indefinite Human Only while a stale resume worker is pending; worker CAS cannot overwrite newer choice.
-- A model/flow generates content while Human Only or Copilot owns a conversation: **zero** direct automated sends, no duplicate retry deliveries.
-- In Copilot: approve/send once, edit before approval, reject, expired/stale version conflict and multi-agent duplicate clicks all give correct durable status.
-- Bot/flow/AI labels are proven by persisted lineage; no assistant trace is invented for a deterministic flow message.
-- Tool and retrieval traces are visible only to authorized workspace operators and only for allowed sources; no cross-tenant data leakage, tokens or secrets.
-- Incoming/replayed webhooks and rate-limit/retry conditions preserve ordering, deduplication and messaging window enforcement.
-- E2E on desktop and mobile: unread/message ordering, filters, search, panel scroll, keyboard controls, no stuck recovery after toggling modes.
-- CI proves builder + business + worker tests, typechecks/build, vulnerability/secret/license audits; live API tests recorded per account/provider separately.
+- [Executed Phase 0–2 audit](PHASE_0_2_EVIDENCE_AUDIT.md): 18 milestones, **3 verified / 7 partial / 8 blocked**.
+- [Foundation CI success](https://github.com/krisfromsg-afk/Super-Social-Intelligence/actions/runs/38017870148), [Broad Regression success](https://github.com/krisfromsg-afk/Super-Social-Intelligence/actions/runs/38017870158); neither is production acceptance.
+- [Strict release gate](https://github.com/krisfromsg-afk/Super-Social-Intelligence/actions/runs/38026788971) intentionally fails until all acceptance cases are proven.
 
-## Current CI/Audit interpretation
-
-Previous Foundation CI passed at code checkpoints, and prior broad regression uncovered eight stale test failures. The eight contract expectations were revised. A later broad regression still found a server import in `message-thread-pane-scroll.test.tsx`; fixture isolation was fixed. The latest diagnostic runs are not a release verdict until complete. License guards deliberately block acceptance while issue #4 remains unresolved.
-
-**Mandatory merge sequence:** resolve license/provenance/history issue #4 and produce a clean reviewed import → audit and merge PR #1 into main → rebase/retarget PR #2 → complete P2.3–P2.9 and all acceptance gates → merge PR #2 → staging canary → production decision. No code-only success overrides legal, data-security or channel gates.
+**Merge order:** clear P0 license/history issue #4 → complete Phase 1 branding/runtime/database staging checks → implement and test P2.3–P2.9 → finish channel/tenant E2E and production release audit → merge approved code. Legacy PR #1/#2 are CLOSED and MUST NOT be revived or used as contaminated parents.

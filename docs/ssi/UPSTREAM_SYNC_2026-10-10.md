@@ -36,7 +36,7 @@ The clean SSI feature branch intentionally excludes `apps/builder/src/enterprise
 
 ## CI integrity note
 
-The latest clean-branch Foundation/Broad Regression CI for `eba51bb0` completed red because `drizzle-kit generate` requires an interactive rename decision, but was run without a TTY. Most builder/business/worker tests and type checks completed successfully. **It is not a passed migration-drift gate**, and a green build cannot certify DB schema compatibility. This branch keeps the strict failure until a human-reviewed schema/migration reconciliation and PostgreSQL staging test are available.
+The earlier CI at `eba51bb0` was red because `drizzle-kit generate` required an interactive rename decision in a non-TTY environment. SSI-authored ORM models were reconciled to the migration snapshot in later commits; Foundation #38017870148 and Broad Regression #38017870158 passed schema-drift and their covered unit/type/build gates. **No actual PostgreSQL migration, historical data preservation or rollback is certified.** The Phase 0–2 strict release gate remains blocked.
 
 Upstream: https://github.com/ChatbotXIO/ChatbotX
 
