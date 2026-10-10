@@ -58,7 +58,7 @@ export const customDomainModel = pgTable("CustomDomain", {
 
 export const tenantHelpItemModel = pgTable("TenantHelpItem", {
   ...sharedColumns,
-  tenantId: bigintAsString().notNull().references(() => tenantModel.id, { onDelete: "cascade" }),
+  tenantId: bigintAsString().notNull().references(() => tenantModel.id, { onDelete: "cascade", onUpdate: "cascade" }),
   name: text().notNull(),
   url: text().notNull(),
   icon: text(),
