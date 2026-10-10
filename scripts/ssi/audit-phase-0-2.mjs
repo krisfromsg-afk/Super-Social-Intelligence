@@ -52,6 +52,28 @@ for (const path of requiredPaths) {
 if (!contains("LICENSE", "Copyright (c) 2024-present AhaChat LLC.")) {
   violations.push("Upstream copyright/MIT provenance missing")
 }
+const PINNED_UPSTREAM = "f1ca4a8f74cc08ca68d601ba2ce0e58bd9c5e67c"
+// Do not mark bootstrap verified merely because arbitrary app files exist:
+// the import must still carry the reviewed upstream pin in executable import
+// policy, and CI must actually inspect reachable Git ancestry.
+if (!contains("scripts/ssi/import-community.sh", PINNED_UPSTREAM) ||
+    !contains("docs/ssi/UPSTREAM_POLICY.md", PINNED_UPSTREAM)) {
+  violations.push("Pinned upstream SHA missing/inconsistent in import policy")
+}
+if (!contains(".github/workflows/ssi-commercial-source-boundary.yml", "git rev-list --objects HEAD")) {
+  violations.push("Main commercial-source CI ancestry guard is not wired")
+}
+// Badge logic existing in isolation is not proof that users ever see it:
+// enforce its integration into the real, paginated conversation timeline.
+if (!contains("apps/builder/src/features/messages/components/message-item.tsx", "getSsiOutboundAuthor(message)") ||
+    !contains("apps/builder/src/features/messages/components/message-item.tsx", "ssi-message-provenance") ||
+    !contains("apps/builder/src/features/messages/message-list.tsx", "<MessageItem")) {
+  violations.push("SSI outbound provenance helper is not wired to visible Inbox messages")
+}
+if (!contains("apps/builder/src/features/conversations/actions/keep-human-only.action.ts", "botResumeAt: null") ||
+    !contains("apps/builder/src/features/chat/chat-panes.tsx", "keepHumanOnlyAction")) {
+  violations.push("Durable Human Only action is not wired into Inbox UI")
+}
 let reachableObjects = ""
 let head = "unknown"
 try {
@@ -77,7 +99,7 @@ function record(phase, id, status, statement, files, reason) {
 }
 // A source witness is NOT evidence of a fully certified production system.
 record("00", "P0-1", "verified", "SSI plan, code snapshot and provenance notice exist",
-  ["LICENSE", "docs/ssi/MASTER_PLAN.md", "apps/builder/package.json", "packages/database/src/schema/ssi-platform/models.ts"],
+  ["LICENSE", "docs/ssi/MASTER_PLAN.md", "scripts/ssi/import-community.sh", "docs/ssi/UPSTREAM_POLICY.md", "apps/builder/package.json", "packages/database/src/schema/ssi-platform/models.ts"],
   "Snapshot lives in draft PR, not main")
 record("00", "P0-2", "verified", "Known forbidden source trees omitted from clean branch",
   [".github/workflows/ssi-commercial-source-boundary.yml", "docs/ssi/COMMERCIAL_SOURCE_BOUNDARY.md"],
@@ -103,7 +125,7 @@ record("02", "P2-0", "partial", "Omnichannel Inbox baseline",
   ["apps/builder/src/features/chat/chat-panes.tsx", "apps/builder/src/features/conversations/conversation-filter.tsx"],
   "Existing Community UI and unit tests; no SSI browser/mobile acceptance")
 record("02", "P2-1", "verified", "Persisted outbound sender categories are displayed honestly",
-  ["apps/builder/src/features/ssi-inbox/message-provenance.ts", "apps/builder/src/features/ssi-inbox/__tests__/message-provenance.test.ts"],
+  ["apps/builder/src/features/ssi-inbox/message-provenance.ts", "apps/builder/src/features/ssi-inbox/__tests__/message-provenance.test.ts", "apps/builder/src/features/messages/components/message-item.tsx", "apps/builder/src/features/messages/message-list.tsx"],
   "Sender bot includes both flows and AI, not a verified LLM/model label")
 record("02", "P2-2", "partial", "Indefinite Human Only, enable, cross-tab and CAS",
   ["apps/builder/src/features/conversations/actions/keep-human-only.action.ts",
