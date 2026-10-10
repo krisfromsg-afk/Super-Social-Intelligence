@@ -2,6 +2,7 @@
 
 import { BotIcon, UserRoundIcon } from "lucide-react"
 import { useMemo } from "react"
+import { getSsiOutboundFlowReference } from "./message-provenance"
 import type { ConversationResource } from "@/features/conversations/schema/resource"
 import { useThreadControl } from "@/features/conversations/hooks/use-thread-control"
 import { isConversationActive } from "@/features/conversations/utils/bot-state"
@@ -69,8 +70,9 @@ export function SsiBotActivityPanel({
         </span>
       </div>
       <p className="mt-2 text-muted-foreground text-xs">
-        Recent loaded bot replies for this conversation. Automation may use AI
-        or fixed flows; source citations and AI tool traces are not yet available.
+        Recent loaded bot replies for this conversation. A stored flow reference
+        is not proof of an executed flow or AI generation; verified AI traces
+        and retrieval citations are not yet available.
       </p>
       {botMessages.length > 0 ? (
         <ol className="mt-3 space-y-2">
@@ -79,6 +81,11 @@ export function SsiBotActivityPanel({
               <p className="line-clamp-3 whitespace-pre-wrap break-words text-xs">
                 {message.text?.trim() || "Non-text response"}
               </p>
+              {getSsiOutboundFlowReference(message) && (
+                <p className="mt-1 text-[10px] text-muted-foreground" title="Stored flow reference only; AI/LLM generation and execution are not verified">
+                  Flow reference recorded · AI origin unverified
+                </p>
+              )}
               <time
                 className="mt-1 block text-[10px] text-muted-foreground"
                 dateTime={new Date(message.createdAt).toISOString()}

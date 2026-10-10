@@ -1,4 +1,5 @@
 import { readFileSync, existsSync } from "node:fs"
+import { createHash } from "node:crypto"
 import { join } from "node:path"
 import { inflateSync } from "node:zlib"
 import { describe, expect, it } from "vitest"
@@ -90,6 +91,26 @@ describe("SSI brand/favicon production asset integrity", () => {
       expect(iconEntry.src.startsWith("/brand/favicon/")).toBe(true)
       expect(existsSync(join(root, "public", iconEntry.src.slice(1)))).toBe(true)
       expect(["image/svg+xml", "image/png"]).toContain(iconEntry.type)
+    }
+  })
+
+  it("blocks restoration of the six pinned upstream favicon blobs", () => {
+    const upstream = {
+      "apple-touch-icon.png": "05145841d27a55cd7b0f3d3be5c3d4dd42f1c009",
+      "favicon-96x96.png": "8a6755b0ec46326ea40d24490fb7a8f7ad7b95d3",
+      "favicon.ico": "291e76ac10e9dc26e3a638110bd218d764e451dc",
+      "favicon.svg": "6d1ab815be7b0205c93425fefd54d268bd8fcd04",
+      "web-app-manifest-192x192.png": "20d0d48e933f7192b1deafe9a0bc61f5b0fad3e5",
+      "web-app-manifest-512x512.png": "0f6138fe4c927d14e3827a8c8b0ecc3568b9e560",
+    }
+    for (const [name, upstreamSha] of Object.entries(upstream)) {
+      const bytes = binary(name)
+      const sha = createHash("sha1")
+        .update(Buffer.from("blob " + bytes.length))
+        .update(Buffer.from([0]))
+        .update(bytes)
+        .digest("hex")
+      expect(sha, `${name} matches the upstream ChatbotX icon`).not.toBe(upstreamSha)
     }
   })
 

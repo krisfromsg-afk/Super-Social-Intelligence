@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest"
-import { getSsiOutboundAuthor } from "../message-provenance"
+import { getSsiOutboundAuthor, getSsiOutboundFlowReference } from "../message-provenance"
 
 describe("SSI inbox sender provenance", () => {
   it("labels automated senders as bot, without claiming all are LLM output", () => {
@@ -32,5 +32,49 @@ describe("SSI inbox sender provenance", () => {
     expect(
       getSsiOutboundAuthor({ messageType: "outgoing", senderType: "contact" }),
     ).toBeNull()
+  })
+})
+
+describe("SSI stored flow references (not verified AI provenance)", () => {
+  it("reads persisted references without inferring LLM authorship", () => {
+    expect(
+      getSsiOutboundFlowReference({
+        messageType: "outgoing",
+        senderType: "bot",
+        contentAttributes: { flowId: " flow-123 ", flowVersionId: "version-7", stepId: "step-9" },
+      }),
+    ).toEqual({ flowId: "flow-123", flowVersionId: "version-7", stepId: "step-9" })
+  })
+
+  it("rejects absent, blank or non-string flow IDs", () => {
+    for (const contentAttributes of [null, { flowId: "  " }, { flowId: 123 }]) {
+      expect(
+        getSsiOutboundFlowReference({ messageType: "outgoing", senderType: "bot", contentAttributes }),
+      ).toBeNull()
+    }
+  })
+
+  it("never calls human, API or incoming messages flow-linked bot replies", () => {
+    for (const [messageType, senderType] of [
+      ["outgoing", "user"], ["outgoing", "api"], ["incoming", "bot"],
+    ] as const) {
+      expect(
+        getSsiOutboundFlowReference({
+          messageType,
+          senderType,
+          contentAttributes: { flowId: "flow-123" },
+        }),
+      ).toBeNull()
+    }
+  })
+
+  it("ignores malformed optional references", () => {
+    expect(
+      getSsiOutboundFlowReference({
+        messageType: "outgoing",
+        senderType: "bot",
+        contentAttributes: { flowId: "flow-123", flowVersionId: 8, stepId: "" },
+      }),
+    ).toEqual({ flowId: "flow-123" })
   })
 })

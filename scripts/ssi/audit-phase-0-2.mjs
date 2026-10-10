@@ -111,7 +111,7 @@ record("00", "P0-4", "partial", "Package, build, static regression baselines",
   "Targeted CI passes, but lint/secret/dependency audits and actual deployment are not fully certified")
 record("01", "P1-1", "partial", "SSI name, logo and web manifest rebrand",
   ["apps/builder/public/brand/logo.svg", "apps/builder/public/brand/favicon/site.webmanifest"],
-  "Six legacy favicon assets remain identical to pinned ChatbotX upstream")
+  "Verify favicon blob parity below; brand links, i18n and UI sign-off are still required")
 record("01", "P1-2", "blocked", "Complete link, email, i18n and product namespace migration",
   ["package.json", "apps/builder/package.json"],
   "Internal @chatbotx.io packages remain for compatibility; full marketing/link/localization sweep not signed off")
@@ -132,8 +132,9 @@ record("02", "P2-2", "partial", "Indefinite Human Only, enable, cross-tab and CA
     "apps/builder/src/features/ssi-inbox/__tests__/human-only.test.ts"],
   "Focused tests exist; atomic send suppression in all dispatchers and live race E2E not proven")
 record("02", "P2-3", "blocked", "Message-to-model/flow durable verified provenance",
-  ["apps/builder/src/features/ssi-inbox/bot-activity-panel.tsx"],
-  "Panel explicitly labels real bot messages only, says LLM/tool/RAG provenance not available")
+  ["apps/builder/src/features/ssi-inbox/bot-activity-panel.tsx",
+    "apps/builder/src/features/ssi-inbox/message-provenance.ts"],
+  "Stored flow references now appear cautiously; LLM/tool/RAG execution still unverified")
 record("02", "P2-4", "blocked", "Persistent Human/Copilot/Autopilot modes and server-enforced send policy",
   ["docs/ssi/PHASE02_COMPLETION_PLAN.md"], "Three-state SSI policy, server-wide dispatch guard and proofs absent")
 record("02", "P2-5", "blocked", "Idempotent AI draft approve/edit/reject queue",
