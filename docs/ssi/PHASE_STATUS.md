@@ -12,7 +12,7 @@ The acceptance script `scripts/ssi/audit-phase-0-2.mjs` and `.github/workflows/s
 | Phase | Audited result | Verified source | Remaining hard gates |
 | --- | --- | --- | --- |
 | Phase 00 · License-safe bootstrap | **PARTIAL** | Pinned Community snapshot from clean SSI ancestry, known restricted subtree exclusion, retained MIT copyright and history/source guard | Legal provenance and third-party artifacts; stale PR/cache retention; DB rehearsal; main not yet carrying application |
-| Phase 01 · Rebrand and core | **PARTIAL** | SSI package name, SVG wordmark, manifest, targeted builder types/build and migration-snapshot drift | 6 original ChatbotX favicon asset blobs, internal namespaces, links/locales/Terms/Privacy, real PostgreSQL upgrade/rollback and staging login/worker smoke |
+| Phase 01 · Rebrand and core | **PARTIAL** | SSI package name, SVG wordmark, manifest, targeted builder types/build and migration-snapshot drift | legacy favicon assets now replaced (new build verification pending), internal namespaces, links/locales/Terms/Privacy, real PostgreSQL upgrade/rollback and staging login/worker smoke |
 | Phase 02 · Inbox and channel contracts | **PARTIAL** | Outbound source labels, loaded bot activity, indefinite Human Only and cross-tab/CAS tests | P2.3 durable AI/flow provenance; P2.4 three-state server send gate; P2.5 approval queue; P2.6 source/tool trace API; verified platform fixtures/E2E/security/rollback |
 
 ## Genuine CI results for the last fully checked application baseline

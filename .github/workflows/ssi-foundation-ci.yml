@@ -55,6 +55,8 @@ jobs:
         id: schema_drift
         continue-on-error: true
         run: pnpm --filter @chatbotx.io/database db:check-drift
+      - name: Verify SSI favicon raster, vector and PWA metadata
+        run: pnpm --filter builder exec vitest run __tests__/ssi-brand-assets.test.ts
       - name: Verify SSI sender classification unit tests
         run: pnpm --filter builder exec vitest run src/features/ssi-inbox/__tests__/message-provenance.test.ts
       - name: Verify permanent Human Only state

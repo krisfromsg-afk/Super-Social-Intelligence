@@ -33,13 +33,20 @@ export async function generateMetadata(): Promise<Metadata> {
   return {
     title: name,
     description: name,
-    icons: [
-      {
-        rel: "icon",
-        url: faviconUrl ?? "/brand/icon_black.svg",
-        type: "image/svg+xml",
-      },
-    ],
+    // Match the declared MIME type to each asset. Tenant overrides may be
+    // PNG, ICO, SVG or CDN-hosted; never force them to image/svg+xml.
+    icons: faviconUrl
+      ? { icon: [{ url: faviconUrl }], apple: [{ url: faviconUrl }] }
+      : {
+          icon: [
+            { url: "/brand/favicon/favicon.svg", type: "image/svg+xml", sizes: "any" },
+            { url: "/brand/favicon/favicon.ico", sizes: "32x32" },
+            { url: "/brand/favicon/favicon-96x96.png", type: "image/png", sizes: "96x96" },
+          ],
+          apple: [
+            { url: "/brand/favicon/apple-touch-icon.png", type: "image/png", sizes: "180x180" },
+          ],
+        },
     manifest: "/brand/favicon/site.webmanifest",
   }
 }

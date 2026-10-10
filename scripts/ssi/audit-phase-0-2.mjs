@@ -147,7 +147,7 @@ for (const [path, upstreamBlob] of legacyIconBlobIds) {
 }
 if (oldIcons.length === 0) {
   const brand = rows.find((x) => x.id === "P1-1")
-  brand.remaining = "Brand and fallback links still require UI/marketing acceptance"
+  brand.remaining = "SSI favicon blob parity resolved; brand links, email templates, i18n and UI sign-off still required"
 }
 const count = (status) => rows.filter((x) => x.status === status).length
 const accepted = violations.length === 0 && count("partial") === 0 && count("blocked") === 0

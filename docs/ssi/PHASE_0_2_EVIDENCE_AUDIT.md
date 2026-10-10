@@ -24,7 +24,7 @@
 
 ## Phase 1 — Rebrand/core
 
-**PARTIAL.** Root package and web manifest say SSI, SVG logo/manifest changed, and targeted TypeScript/Next.js build passes. **Six favicon files (ICO/PNG/SVG) have byte-identical Git blob SHAs to pinned upstream ChatbotX**: `apple-touch-icon.png`, `favicon-96x96.png`, `favicon.ico`, `favicon.svg`, `web-app-manifest-192x192.png`, `web-app-manifest-512x512.png` under `apps/builder/public/brand/favicon`. No blanket file removal until references are audited. Internal `@chatbotx.io/*` package imports remain intentionally unchanged. Full marketing/legal link and locale review is outstanding. The Drizzle schema-drift command passing is **not** a DB migration, rollback or existing-data rehearsal. No staging login/dashboard/worker/inbox evidence or approved Terms/Privacy URLs.
+**PARTIAL.** Root package and web manifest say SSI, SVG logo/manifest changed, and targeted TypeScript/Next.js build passes. **Follow-up remediation:** all six legacy ChatbotX favicon files have now been replaced by SSI-designed raster/vector assets, and web manifest / Apple icon / tenant override metadata updated. Brand asset Vitest is required in Foundation CI. Full marketing/email/i18n/product identity and live visual acceptance remain open. Internal `@chatbotx.io/*` package imports remain intentionally unchanged. Full marketing/legal link and locale review is outstanding. The Drizzle schema-drift command passing is **not** a DB migration, rollback or existing-data rehearsal. No staging login/dashboard/worker/inbox evidence or approved Terms/Privacy URLs.
 
 ## Phase 2 — Unified Inbox
 
@@ -46,3 +46,7 @@
 ## Executed source audit
 
 On commit `37b724bc2076c4e1511c94b519ff9c1d13824a3b`, the executable script ran in [GitHub Actions #38026788971](https://github.com/krisfromsg-afk/Super-Social-Intelligence/actions/runs/38026788971). The checkpoint job succeeded, proving source witness integrity, forbidden-path ancestry and deterministic report generation. Its JSON artifact reports **3 verified, 7 partial, 8 blocked, 0 invariant violations**. The separate strict gate intentionally returns a nonzero exit code until all items are accepted. This is an acceptance failure, **not** a failing TypeScript build.
+
+## 2026-10-10 favicon/source identity remediation
+
+Implemented on canonical branch following the first audit checkpoint: replaced six upstream-identical favicon assets with the existing SSI icon design, added SVG/ICO/PNG fallbacks and PWA sizes, kept per-tenant favicon override without forcing the wrong SVG MIME type, and added `apps/builder/__tests__/ssi-brand-assets.test.ts` plus a Foundation CI step. This removes **one concrete Phase 1 defect** without claiming Phase 1 accepted. The old artifact baseline (3/7/8) is historical: rerun the current source audit to confirm `oldIconFilesMatchingChatbotX: []`. Visual/browser/tenant-staging sign-off is still required.
