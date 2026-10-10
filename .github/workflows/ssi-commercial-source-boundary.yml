@@ -1,0 +1,53 @@
+name: SSI Commercial Source Boundary
+
+# This gate lives on main, independently of draft application branches. It
+# prevents an unreviewed Community reimport from quietly restoring excluded
+# source. It is not a substitute for a complete license/provenance review.
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  commercial-source-boundary:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Reject restricted source and historical blobs
+        shell: bash
+        run: |
+          set -euo pipefail
+          forbidden='(apps/builder/src/enterprise|packages/database/src/(schema|relations)/enterprise)(/|$)'
+          if git ls-files | grep -E "^$forbidden"; then
+            echo "Restricted source paths found in the checked-out tree" >&2
+            exit 1
+          fi
+          if git rev-list --objects HEAD | grep -E " $forbidden"; then
+            echo "Restricted source paths are reachable from current commit history" >&2
+            exit 1
+          fi
+          for dir in apps packages integrations; do
+            if test -d "$dir"; then
+              if find "$dir" -type f \( -iname 'LICENSE' -o -iname 'LICENSE.*' -o -iname 'NOTICE' -o -iname 'NOTICE.*' \) -print0 |
+                  xargs -0 -r grep -il 'ChatbotX Commercial License' |
+                  grep -q .; then
+                echo "Unreviewed nested ChatbotX Commercial License" >&2
+                exit 1
+              fi
+            fi
+          done
+          if test -d apps || test -d packages; then
+            test -f LICENSE || {
+              echo "Community source requires the original upstream copyright/MIT notice" >&2
+              exit 1
+            }
+          fi
+          echo "SSI path/history/nested-license boundary passed; broader legal review still required."
