@@ -97,9 +97,20 @@ const drift = created.map((folder) => {
 })
 
 if (result.status !== 0) {
-  console.error(result.stdout ?? "")
-  console.error(result.stderr ?? "")
-  console.error("[ERROR] drizzle-kit generate failed.")
+  const output = [result.stdout ?? "", result.stderr ?? ""].join("\n")
+  console.error(output)
+  if (/Interactive prompts require a TTY terminal/.test(output)) {
+    console.error(
+      "[STOP-SHIP] Drizzle requires an interactive schema-rename decision. " +
+        "The snapshot and SSI ORM schema may differ. Run this check in a " +
+        "local interactive review environment, inspect every proposed " +
+        "rename/drop/create and record a safe migration with tests. " +
+        "CI must not guess answers, select destructive defaults, or mark " +
+        "the schema as synchronized.",
+    )
+  } else {
+    console.error("[ERROR] drizzle-kit generate failed.")
+  }
   process.exit(2)
 }
 
