@@ -47,7 +47,7 @@ describe("SSI stored flow references (not verified AI provenance)", () => {
   })
 
   it("rejects absent, blank or non-string flow IDs", () => {
-    for (const contentAttributes of [null, { flowId: "  " }, { flowId: 123 }]) {
+    for (const contentAttributes of [null, [], { flowId: "  " }, { flowId: 123 }]) {
       expect(
         getSsiOutboundFlowReference({ messageType: "outgoing", senderType: "bot", contentAttributes }),
       ).toBeNull()

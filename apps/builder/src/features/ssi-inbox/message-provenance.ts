@@ -32,7 +32,7 @@ export function getSsiOutboundFlowReference(
     return null
   }
   const attributes = message.contentAttributes
-  if (!attributes || typeof attributes !== "object") {
+  if (!attributes || typeof attributes !== "object" || Array.isArray(attributes)) {
     return null
   }
   const flowId = attributes.flowId
