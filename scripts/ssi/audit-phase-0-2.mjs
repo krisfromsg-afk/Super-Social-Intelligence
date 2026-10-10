@@ -24,7 +24,7 @@ const exists = (path) => existsSync(relative(path))
 const contains = (path, snippet) =>
   exists(path) && readFileSync(relative(path), "utf8").includes(snippet)
 const git = (...args) =>
-  execFileSync("git", ["-C", root, ...args], { encoding: "utf8" }).trim()
+  execFileSync("git", ["-C", root, ...args], { encoding: "utf8", maxBuffer: 32 * 1024 * 1024 }).trim()
 
 const excludedPaths = [
   "apps/builder/src/enterprise",
