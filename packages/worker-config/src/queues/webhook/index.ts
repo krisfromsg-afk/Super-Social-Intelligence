@@ -1,0 +1,33 @@
+import type { TriggerEventType } from "@chatbotx.io/database/partials"
+import { Queue } from "bullmq"
+import {
+  defaultJobOptions,
+  fakeQueue,
+  getQueueConnection,
+  isNoRedisEnv,
+} from "../../lib/connection"
+import { queueNames } from "../../lib/types"
+
+export const WebhookJobAction = {
+  evaluateWebhooks: "evaluateWebhooks",
+} as const
+
+export type WebhookJobEvaluate = {
+  type: "evaluateWebhooks"
+  data: {
+    workspaceId: string
+    contactId: string
+    eventType: TriggerEventType
+    eventData: Record<string, unknown>
+    timestamp: Date
+  }
+}
+
+export type WebhookJobData = WebhookJobEvaluate
+
+export const webhookQueue = isNoRedisEnv()
+  ? fakeQueue
+  : new Queue<WebhookJobData>(queueNames.enum.webhook, {
+      connection: getQueueConnection(queueNames.enum.webhook),
+      defaultJobOptions,
+    })

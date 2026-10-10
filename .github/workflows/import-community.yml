@@ -1,0 +1,42 @@
+name: SSI Community Source Import
+
+# Explicit manual audit only: never auto-reimport unreviewed upstream code.
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ssi-community-import
+  cancel-in-progress: false
+
+jobs:
+  import:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: feat/ssi-clean-history-rebuild
+          persist-credentials: true
+      - name: Check provenance boundary
+        run: |
+          test -f docs/ssi/UPSTREAM_POLICY.md
+          test ! -e apps/builder/src/enterprise
+          test ! -e packages/database/src/schema/enterprise
+          test ! -e packages/database/src/relations/enterprise
+      - name: Install rsync
+        run: |
+          command -v rsync
+      - name: Import allowed source snapshot (intentionally gated)
+        env:
+          UPSTREAM_SHA: f1ca4a8f74cc08ca68d601ba2ce0e58bd9c5e67c
+        run: bash scripts/ssi/import-community.sh
+      - name: Verify repository tree
+        run: |
+          test ! -e apps/builder/src/enterprise
+          test -f packages/ai/package.json
+          test -f apps/builder/package.json
+          test -f LICENSE
+          if git ls-files | grep -E '^(apps/builder/src/enterprise|packages/database/src/(schema|relations)/enterprise)(/|$)'; then exit 1; fi

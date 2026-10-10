@@ -24,7 +24,7 @@
 
 ## Phase 1 — Rebrand/core
 
-**PARTIAL.** Root package and web manifest say SSI, SVG logo/manifest changed, and targeted TypeScript/Next.js build passes. **Six favicon files (ICO/PNG/SVG) have byte-identical Git blob SHAs to pinned upstream ChatbotX**: `apple-touch-icon.png`, `favicon-96x96.png`, `favicon.ico`, `favicon.svg`, `web-app-manifest-192x192.png`, `web-app-manifest-512x512.png` under `apps/builder/public/brand/favicon`. No blanket file removal until references are audited. Internal `@chatbotx.io/*` package imports remain intentionally unchanged. Full marketing/legal link and locale review is outstanding. The Drizzle schema-drift command passing is **not** a DB migration, rollback or existing-data rehearsal. No staging login/dashboard/worker/inbox evidence or approved Terms/Privacy URLs.
+**PARTIAL.** Root package and web manifest say SSI, SVG logo/manifest changed, and targeted TypeScript/Next.js build passes. **Follow-up remediation:** all six legacy ChatbotX favicon files have now been replaced by SSI-designed raster/vector assets, and web manifest / Apple icon / tenant override metadata updated. Brand asset Vitest is required in Foundation CI and now rejects any of the six original pinned-upstream Git blob hashes. Full marketing/email/i18n/product identity and live visual acceptance remain open. Internal `@chatbotx.io/*` package imports remain intentionally unchanged. Full marketing/legal link and locale review is outstanding. The Drizzle schema-drift command passing is **not** a DB migration, rollback or existing-data rehearsal. No staging login/dashboard/worker/inbox evidence or approved Terms/Privacy URLs.
 
 ## Phase 2 — Unified Inbox
 
@@ -34,7 +34,7 @@
 - `apps/builder/src/features/conversations/actions/keep-human-only.action.ts`: disables indefinitely via `botEnabled=false, botResumeAt=null`; unit tests include `human-only.test.ts` and cross-tab state.
 - Imported channel and conversation-routing fixtures exist; they are not a SSI live-provider OAuth/webhook certification.
 
-**NOT IMPLEMENTED/NOT ACCEPTED:** P2.3 true flow-vs-LLM message lineage; P2.4 persistent Human/Copilot/Autopilot modes with final send gate; P2.5 durable draft approval/edit/reject/outbox; P2.6 authorized model/tool/retrieval traces; P2.7 full provider-live contracts; P2.8 end-to-end mobile/a11y/vi; P2.9 DB tenancy, OAuth canary and rollback. A broad CI green result does not certify these.
+**NOT IMPLEMENTED/NOT ACCEPTED:** P2.3 true flow-vs-LLM message lineage (stored flow references now visible but execution/AI origin explicitly unverified); P2.4 persistent Human/Copilot/Autopilot modes with final send gate; P2.5 durable draft approval/edit/reject/outbox; P2.6 authorized model/tool/retrieval traces; P2.7 full provider-live contracts; P2.8 end-to-end mobile/a11y/vi; P2.9 DB tenancy, OAuth canary and rollback. A broad CI green result does not certify these.
 
 ## Release blockers and order
 
@@ -46,3 +46,14 @@
 ## Executed source audit
 
 On commit `37b724bc2076c4e1511c94b519ff9c1d13824a3b`, the executable script ran in [GitHub Actions #38026788971](https://github.com/krisfromsg-afk/Super-Social-Intelligence/actions/runs/38026788971). The checkpoint job succeeded, proving source witness integrity, forbidden-path ancestry and deterministic report generation. Its JSON artifact reports **3 verified, 7 partial, 8 blocked, 0 invariant violations**. The separate strict gate intentionally returns a nonzero exit code until all items are accepted. This is an acceptance failure, **not** a failing TypeScript build.
+
+## 2026-10-10 favicon/source identity remediation
+
+Implemented on canonical branch following the first audit checkpoint: replaced six upstream-identical favicon assets with the existing SSI icon design, added SVG/ICO/PNG fallbacks and PWA sizes, kept per-tenant favicon override without forcing the wrong SVG MIME type, and added `apps/builder/__tests__/ssi-brand-assets.test.ts` plus a Foundation CI step. This removes **one concrete Phase 1 defect** without claiming Phase 1 accepted. The old artifact baseline (3/7/8) is historical: rerun the current source audit to confirm `oldIconFilesMatchingChatbotX: []`. Visual/browser/tenant-staging sign-off is still required.
+
+## 2026-10-10 incremental source-evidence checkpoint
+
+- `getSsiOutboundFlowReference` reads only outbound bot messages with a non-empty, persisted `contentAttributes.flowId` and optional version/step fields; it never treats a flow reference as proof of LLM generation or completed execution.
+- The automation activity panel labels those loaded messages **Flow reference recorded · AI origin unverified**. It does not expose model/tool prompts or invent retrieval sources.
+- New focused tests cover flow attribution, malformed metadata, and non-bot messages. The SSI favicon regression test now rejects restoration of the six original ChatbotX file blob hashes.
+- **Unchanged status:** Phase 00–02 is NOT ACCEPTED; P2.3–P2.6 require persisted verified executions, enforced send modes, tenant tests and a draft approval/outbox system.

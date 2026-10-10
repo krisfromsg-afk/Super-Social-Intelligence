@@ -1,0 +1,25 @@
+"use server"
+
+import { magicLinkService } from "@chatbotx.io/business"
+import {
+  type BulkUpdateIdsRequest,
+  bulkUpdateIdsRequest,
+  type WorkspaceIdRequestParams,
+  workspaceIdrequestParams,
+} from "@/features/common/schema"
+import { workspaceActionClient } from "@/lib/safe-action"
+
+export const deleteMagicLinksAction = workspaceActionClient
+  .bindArgsSchemas(workspaceIdrequestParams)
+  .inputSchema(bulkUpdateIdsRequest)
+  .action(
+    async ({
+      bindArgsParsedInputs: [workspaceId],
+      parsedInput,
+    }: {
+      bindArgsParsedInputs: WorkspaceIdRequestParams
+      parsedInput: BulkUpdateIdsRequest
+    }) => {
+      await magicLinkService.deleteMany({ workspaceId, ids: parsedInput.ids })
+    },
+  )

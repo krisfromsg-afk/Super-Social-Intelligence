@@ -1,0 +1,1228 @@
+import {
+  appointmentExternalCalendarService,
+  hasWorkspaceAccess,
+  integrationFacebookAdsService,
+  integrationThreadsService,
+  platformCredentialService,
+  workspaceService,
+} from "@chatbotx.io/business"
+import { auditService, withAuditContext } from "@chatbotx.io/business/audit"
+import { connectSessionService } from "@chatbotx.io/business/connect-session"
+import { ChatbotXException } from "@chatbotx.io/business/errors"
+import {
+  CONNECTION_REGISTRY,
+  connectionService,
+  failSession,
+} from "@chatbotx.io/connections"
+import { db } from "@chatbotx.io/database/client"
+import {
+  type IntegrationType,
+  messagingAdChannelTypes,
+} from "@chatbotx.io/database/partials"
+import {
+  integrationGoogleSheetsModel,
+  integrationModel,
+} from "@chatbotx.io/database/schema"
+import type { ConnectSessionModel } from "@chatbotx.io/database/types"
+import { exchangeCodeForToken as exchangeInstagramCode } from "@chatbotx.io/integration-instagram"
+import { exchangeCodeForToken as exchangeInstagramFacebookCode } from "@chatbotx.io/integration-instagram-facebook"
+import {
+  buildThreadsAuthValue,
+  exchangeCodeForToken as exchangeThreadsCode,
+  getThreadsProfile,
+} from "@chatbotx.io/integration-threads"
+import { TiktokMissingScopesError } from "@chatbotx.io/integration-tiktok"
+import type { AuthValue, Oauth2AuthValue } from "@chatbotx.io/sdk"
+import {
+  createId,
+  getPublicUrlFromRequest,
+  zodBigintAsString,
+} from "@chatbotx.io/utils"
+import {
+  appendConnectError,
+  type ConnectErrorQueryCode,
+  connectFailureCauseOf,
+} from "@chatbotx.io/utils/connection"
+import { notFound, redirect } from "next/navigation"
+import type { NextRequest } from "next/server"
+import { normalizeError } from "universal-error-normalizer"
+import { z } from "zod"
+import { resolveOAuthCredential } from "@/features/connections/lib/resolve-connect-credential"
+import { exchangeAndVerifyGoogleCalendar } from "@/features/external-calendars/lib/google-calendar-provider"
+import { enableLeadgenForWorkspacePages } from "@/features/facebook-lead-ad-automation/lib/pages"
+import {
+  reconnectInstagramFacebookHandler,
+  reconnectInstagramHandler,
+} from "@/features/integration-instagram/actions/reconnect-callback"
+import { reconnectMessengerHandler } from "@/features/integration-messenger/actions/reconnect-callback"
+import { reconnectThreadsHandler } from "@/features/integration-threads/actions/reconnect-callback"
+import { connectTiktokHandler } from "@/features/integration-tiktok/actions/connect.action"
+import { connectZaloHandler } from "@/features/integration-zalo/actions/connect-zalo.action"
+import { reconnectZaloHandler } from "@/features/integration-zalo/actions/reconnect-callback"
+import { integrations } from "@/integration"
+import { assertWorkspaceSuperAdmin } from "@/lib/auth/assert-workspace-super-admin"
+import { getCurrentUser } from "@/lib/auth/utils"
+import {
+  buildChannelErrorRedirectUrl,
+  buildReconnectRedirectUrl,
+} from "@/lib/channel-reconnect"
+import { logger } from "@/lib/log"
+import { resolveRelayTarget, sanitizeReferer } from "@/lib/oauth-referer"
+import { resolveOwnerForWorkspace } from "@/lib/platform-credential-owner"
+import { buildProviderCallbackUrl } from "@/lib/provider-origin"
+import { getGuestClientIp } from "@/lib/rate-limit/guest-rate-limit"
+import { createFirstWorkspace } from "@/lib/workspace/create-first-workspace"
+import {
+  messagingAdsIntegrationBelongsToWorkspace,
+  storeFacebookAdsConnection,
+  storeMarketingMessagesConnection,
+  storeMessagingAdsConnection,
+  storeMetaCatalogConnection,
+} from "./callback-stores"
+
+const stateValidationSchema = z.object({
+  workspaceId: zodBigintAsString().optional(),
+  referer: z.url(),
+  // Facebook Ads and Lead Ads reuse the Messenger OAuth callback (the only
+  // redirect_uri registered with the Facebook app); the connect action sets
+  // this flag so the Messenger branch dispatches to the right token-storage /
+  // webhook-subscription logic instead of the page picker.
+  flow: z
+    .enum([
+      "facebookAds",
+      "facebookLeadAds",
+      "metaCatalog",
+      "messagingAds",
+      "facebookMarketingMessages",
+    ])
+    .optional(),
+  // Set by the channel "Reconnect" buttons: the callback refreshes the tokens
+  // of this existing integration row (matched against its stored page/account
+  // identity) instead of running the connect/page-select flow.
+  reconnectIntegrationId: zodBigintAsString().optional(),
+  // `flow: "messagingAds"` only — the per-integration messaging-ads box
+  // (CTWA/CTM/CTID) this connect targets. Both required together and
+  // re-validated against `workspaceId` (ownership + channel match) before
+  // any token is stored — see the `messagingAds` branch below.
+  messagingAdsChannel: messagingAdChannelTypes.optional(),
+  messagingAdsIntegrationId: zodBigintAsString().optional(),
+})
+
+const CONNECT_SESSION_STATE_PATTERN = /^\d+\.[A-Za-z0-9_-]+$/
+
+type ConnectCallbackOutcome =
+  | { kind: "redirect"; target: string }
+  | { kind: "notFound" }
+
+const redirectTo = (target: string): ConnectCallbackOutcome => ({
+  kind: "redirect",
+  target,
+})
+
+const NOT_FOUND_OUTCOME: ConnectCallbackOutcome = { kind: "notFound" }
+
+/**
+ * `session.returnUrl` is always application-relative (`ConnectSession
+ * .returnUrl` is validated by `validateReturnUrl`, which rejects an
+ * absolute value) — resolve it against this callback's own public origin
+ * before handing it to `sanitizeReferer` (which only accepts absolute
+ * URLs). The callback always lands on the correct host for the session:
+ * `buildProviderCallbackUrl` built the registered `redirect_uri` on the
+ * tenant's custom domain for a tenant-owned credential, else the broker —
+ * the same origin the connect flow started on.
+ */
+const resolveReturnUrl = async (
+  session: ConnectSessionModel,
+  url: URL,
+): Promise<string> =>
+  session.returnUrl
+    ? await sanitizeReferer(new URL(session.returnUrl, url.origin).toString())
+    : `/connect/${session.id}`
+
+/**
+ * Dispatches an OAuth callback whose `state` is a raw `"{sessionId}.{nonce}"`
+ * string — the Connection-domain `ConnectSession` flow (`POST
+ * /v1/connections`, `POST /v1/connections/{id}/reconnect`, and the builder
+ * pickers once converted). Unlike the legacy JSON-state flow below, this
+ * path needs no builder session cookie and no authenticated user: every
+ * fact it needs (`workspaceId`, `provider`, `platformOwnerId`, `returnUrl`)
+ * lives on the `ConnectSession` row itself, resolved once at `startSession`
+ * time. It still relays back to `session.originHost` before touching the
+ * session (see below) — same as the legacy flow — because the nonce must
+ * only ever be consumed on the host where the person's browser session
+ * cookie lives. The provider's `redirect_uri`, however, is resolved from
+ * the credential (`buildProviderCallbackUrl`, see below), not from
+ * `originHost` or this request's host: an inherited platform credential
+ * still redirects to the broker even when `originHost` is a reseller's
+ * custom domain. The completion page (`/connect/{id}`) does not require a
+ * signed-in builder session either.
+ *
+ * Once the session is resolved nothing may surface as a raw 500: any
+ * unexpected throw fails the session best-effort and redirects back with
+ * `?connect_error=internal_error`, so the person always sees an error.
+ */
+const handleConnectSessionCallback = async (
+  url: URL,
+  rawState: string,
+  integrationType: IntegrationType,
+) => {
+  const [sessionId, nonce] = rawState.split(".")
+  if (!(sessionId && nonce)) {
+    return notFound()
+  }
+
+  const session = await connectSessionService.findByNonce(nonce)
+  if (!session || session.id !== sessionId) {
+    logger.debug({ sessionId }, "connect session state could not be verified")
+    return notFound()
+  }
+  if (session.provider !== integrationType) {
+    logger.debug(
+      { sessionId, provider: session.provider, integrationType },
+      "connect session state does not match this callback route's provider",
+    )
+    return notFound()
+  }
+
+  let outcome: ConnectCallbackOutcome
+  try {
+    outcome = await runConnectSessionCallback({ url, session, nonce })
+  } catch (err) {
+    logger.error(
+      { err, sessionId: session.id, provider: session.provider },
+      "connect session callback failed unexpectedly",
+    )
+    await failSession(session, "internal_error")
+    let returnUrl = `/connect/${session.id}`
+    try {
+      returnUrl = await resolveReturnUrl(session, url)
+    } catch (resolveErr) {
+      logger.warn(
+        { err: resolveErr, sessionId: session.id },
+        "connect session return URL could not be resolved — using the completion page",
+      )
+    }
+    outcome = redirectTo(appendConnectError(returnUrl, "internal_error"))
+  }
+  return outcome.kind === "notFound" ? notFound() : redirect(outcome.target)
+}
+
+/**
+ * The `connect_error` code for a non-retryable, non-replay failure. A provider
+ * cause (e.g. a Google developer-token problem) and the "no accounts" outcome
+ * are named explicitly; a provider rejection with no recognised cause is left
+ * to the session's own stored code (`undefined`); everything else is an
+ * unexpected fault.
+ */
+const unexpectedConnectErrorCode = (
+  err: unknown,
+): ConnectErrorQueryCode | undefined => {
+  const cause = connectFailureCauseOf(err)
+  if (cause) {
+    return cause
+  }
+  if (
+    err instanceof ChatbotXException &&
+    err.code === "connectionNoCandidates"
+  ) {
+    return "no_candidates"
+  }
+  // The provider rejected the grant without a recognised cause: the
+  // connections layer already stored the precise code (`exchange_failed` or
+  // `provider_error`) on the session, which the page reads via `?session=`.
+  if (
+    err instanceof ChatbotXException &&
+    err.code === "connectionCredentialsRejected"
+  ) {
+    return
+  }
+  return "internal_error"
+}
+
+const runConnectSessionCallback = async ({
+  url,
+  session,
+  nonce,
+}: {
+  url: URL
+  session: ConnectSessionModel
+  nonce: string
+}): Promise<ConnectCallbackOutcome> => {
+  // Mirrors the legacy flow's relay (see `handleCallback` below): OAuth
+  // `redirect_uri`s are pinned per-credential (broker host for an inherited
+  // platform credential, the reseller's own custom domain for a
+  // tenant-owned one) and can differ from the host the connect flow
+  // actually started on — e.g. a reseller browsing the platform host
+  // authorizes through their own app, whose registered redirect_uri is
+  // their custom domain. Relay back to `originHost` (captured at
+  // `startSession` time) before touching the session at all, so the nonce
+  // is only consumed once, on the host where the user's session cookie
+  // lives. `resolveRelayTarget` is loop-safe (no-ops once already on the
+  // target host) and validates `originHost` against the same broker/
+  // builder/custom-domain allow-list as the legacy path.
+  if (session.originHost) {
+    const relayTarget = await resolveRelayTarget(
+      url,
+      `https://${session.originHost}`,
+    )
+    if (relayTarget) {
+      return redirectTo(relayTarget)
+    }
+  }
+
+  const returnUrl = await resolveReturnUrl(session, url)
+
+  // Facebook/Google/Zalo/TikTok all return ?error=... when the user cancels
+  // the OAuth dialog — no code exchange to attempt. Only `access_denied` is
+  // an actual user cancellation; every other provider error value (e.g.
+  // `server_error`, `temporarily_unavailable`, `invalid_scope`) is a
+  // provider-side failure, not a denial, and must not be reported as one.
+  const oauthError = url.searchParams.get("error")
+  if (oauthError) {
+    // Restricted to `pending`: a replayed/edited `?error=` on a session
+    // that already advanced (e.g. to `awaiting_selection`) must not
+    // terminalize the in-flight session out from under the request that's
+    // actually progressing it.
+    await failSession(
+      session,
+      oauthError === "access_denied" ? "provider_denied" : "provider_error",
+      ["pending"],
+    )
+    return redirectTo(returnUrl)
+  }
+
+  const adapter = CONNECTION_REGISTRY[session.provider]
+  if (!(adapter?.credentialType && session.platformOwnerId)) {
+    logger.error(
+      { sessionId: session.id, provider: session.provider },
+      "connect session provider is not OAuth-configured",
+    )
+    // Without this, the session stays `awaiting_selection`/`authorized`
+    // until its TTL lapses and the completion page polls the whole time —
+    // a server-side misconfiguration, not a recoverable state.
+    await failSession(session, "internal_error", ["pending"])
+    return NOT_FOUND_OUTCOME
+  }
+
+  // Same helper the session's start route used, so the `redirect_uri` sent
+  // to the token exchange is rebuilt from the credential exactly as it was
+  // for `authorizeUrl` — never from this request's own origin, which is
+  // `originHost` (not the registered broker/custom-domain host) once the
+  // relay above has bounced the callback.
+  const resolved = await resolveOAuthCredential({
+    provider: session.provider,
+    ownerId: session.platformOwnerId,
+  })
+  if (!resolved) {
+    logger.error(
+      { sessionId: session.id, provider: session.provider },
+      "connect session platform credential missing",
+    )
+    await failSession(session, "internal_error", ["pending"])
+    return NOT_FOUND_OUTCOME
+  }
+
+  const code = url.searchParams.get("code") ?? ""
+  // Set when the callback ends in a failed or stalled connect so the page it
+  // returns to can say so (the session row alone is not enough: a retryable
+  // failure leaves it active, and a failure may carry a provider-specific cause).
+  let connectErrorCode: ConnectErrorQueryCode | undefined
+
+  try {
+    const completed = await connectionService.completeAuthorization({
+      sessionId: session.id,
+      nonce,
+      code,
+      callbackUrl: resolved.callbackUrl,
+      credential: resolved.credential,
+    })
+
+    // A non-multi-account provider's grant always resolves to exactly one
+    // selectable target — finish the connect immediately so an API/MCP
+    // caller (one with no builder session, `actorTokenId` set) never has to
+    // make a second `targets` call for it. A builder-initiated session
+    // (`actorUserId` set) skips this: its picker page — Instagram's direct
+    // login is non-multi-account too, but still shows a confirm screen with
+    // per-row coexist/sync-history opt-ins the person must set before the
+    // connect actually runs — owns finishing the connect itself via its own
+    // `connectTargets` call from the "Continue" button.
+    if (
+      completed.status === "awaiting_selection" &&
+      !adapter.provider.multiAccount &&
+      !completed.actorUserId
+    ) {
+      const onlyTarget = completed.targets[0]
+      if (onlyTarget?.selectable) {
+        await connectionService.connectTargets({
+          sessionId: completed.id,
+          workspaceId: completed.workspaceId,
+          targetIds: [onlyTarget.id],
+        })
+      }
+    }
+  } catch (err) {
+    // `completeAuthorization` already marks the session `failed` for its own
+    // known error paths (exchange rejected, no candidates). A replayed/
+    // double-fired callback (a duplicate request while the session is
+    // still legitimately `pending`/`authorized`/`awaiting_selection`)
+    // throws `connectionStateMismatch`/`connectSessionExpired` instead —
+    // that's "nothing to do, this request is a no-op", not a failure, so
+    // it must NOT call `fail()` and flip a still-active session to
+    // `failed` out from under the request that's actually progressing it.
+    const isBenignReplay =
+      err instanceof ChatbotXException &&
+      (err.code === "connectionStateMismatch" ||
+        err.code === "connectSessionExpired")
+    // A transient upstream/provider failure (`exchangeCode` 502/503) is
+    // retryable — `completeAuthorization` already released the claim back
+    // to `pending` for it (or, for a candidate-listing failure, left the
+    // session at its still-active `authorized` status) before throwing
+    // `connectionProviderUnavailable`, specifically so a later retry can
+    // still complete the connect. Calling `fail()` here would terminalize
+    // that already-reopened session out from under the retry it was just
+    // reopened for.
+    const isRetryable =
+      err instanceof ChatbotXException &&
+      err.code === "connectionProviderUnavailable"
+    if (isBenignReplay) {
+      logger.debug(
+        { err, sessionId: session.id, provider: session.provider },
+        "connect session completeAuthorization replay ignored",
+      )
+    } else if (isRetryable) {
+      connectErrorCode = "provider_unavailable"
+      logger.warn(
+        { err, sessionId: session.id, provider: session.provider },
+        "connect session completeAuthorization failed with a retryable provider error — left active for retry",
+      )
+    } else {
+      // Every other error reaching here is genuinely unexpected — most
+      // commonly the auto-connect step above (`connectTargets`) throwing
+      // after a successful `completeAuthorization` — and is the only thing
+      // that terminalizes the session in that case; without it the session
+      // stayed `awaiting_selection` until its TTL lapsed, and the
+      // completion page polled the whole time instead of showing a failure.
+      // A DB blip inside `fail()` itself must not turn an already-failed
+      // callback into a 500 — the person still needs to land back on
+      // `returnUrl`, and the session just stays in its prior (non-terminal)
+      // status until the nightly reconcile or a future webhook retry —
+      // `failSession` (`@chatbotx.io/connections`) swallows that for us.
+      logger.error(
+        { err, sessionId: session.id, provider: session.provider },
+        "connect session completeAuthorization failed",
+      )
+      await failSession(session, "internal_error")
+      connectErrorCode = unexpectedConnectErrorCode(err)
+    }
+  }
+
+  return redirectTo(
+    connectErrorCode
+      ? appendConnectError(returnUrl, connectErrorCode)
+      : returnUrl,
+  )
+}
+
+export const handleCallback = async (
+  integrationType: IntegrationType,
+  req: NextRequest,
+) => {
+  if (!(integrationType in integrations)) {
+    return notFound()
+  }
+
+  // Parse state params to get workspace info
+  const url = new URL(getPublicUrlFromRequest(req))
+  const rawStateParam = url.searchParams.get("state") ?? ""
+
+  // New Connection-domain sessions (`POST /v1/connections`, `POST
+  // /v1/connections/{id}/reconnect`) carry a raw "{sessionId}.{nonce}"
+  // state — never JSON/base64-encoded — dispatched here before the legacy
+  // parse below, which would otherwise throw trying to atob/JSON.parse it.
+  // Once every legacy JSON-state caller (builder pickers, ads/lead-ads/
+  // meta-catalog connect flows) moves onto sessions, this early branch
+  // becomes the only path and the switch below can be deleted.
+  if (CONNECT_SESSION_STATE_PATTERN.test(rawStateParam)) {
+    return await handleConnectSessionCallback(
+      url,
+      rawStateParam,
+      integrationType,
+    )
+  }
+
+  let rawState: unknown
+  try {
+    rawState = JSON.parse(atob(decodeURIComponent(rawStateParam)))
+  } catch {
+    logger.debug(
+      { url: url.toString() },
+      "state param is not valid base64/JSON",
+    )
+    return notFound()
+  }
+  const { data: stateParams } = stateValidationSchema.safeParse(rawState)
+  if (!stateParams) {
+    logger.debug({ url: url.toString() }, "state is not valid")
+    return notFound()
+  }
+
+  // A reconnect always targets an integration inside an existing workspace;
+  // without a workspaceId the create-workspace branch below would run.
+  if (stateParams.reconnectIntegrationId && !stateParams.workspaceId) {
+    logger.debug(
+      { url: url.toString() },
+      "reconnect state is missing workspaceId",
+    )
+    return notFound()
+  }
+
+  // White-label relay: the redirect_uri is pinned per-credential (broker for
+  // inherited/platform, the reseller's own custom domain for a tenant-owned
+  // one — see `lib/provider-origin.ts`), so the callback host can differ from
+  // where the flow started. When it does, bounce the callback back to the
+  // originating domain — where the user's session cookie lives — preserving
+  // the original code + state. The re-entry runs on the originating host, so
+  // this guard does not match again.
+  const relayTarget = await resolveRelayTarget(url, stateParams.referer)
+  if (relayTarget) {
+    return redirect(relayTarget)
+  }
+
+  // Facebook returns ?error=access_denied when the user cancels
+  if (url.searchParams.get("error")) {
+    const cancelReferer = await sanitizeReferer(stateParams.referer)
+    // A cancelled reconnect must still surface a toast on the settings page,
+    // like every other reconnect outcome.
+    if (stateParams.reconnectIntegrationId) {
+      return redirect(
+        buildReconnectRedirectUrl(cancelReferer, {
+          status: "error",
+          reason: "cancelled",
+        }),
+      )
+    }
+    return redirect(cancelReferer)
+  }
+
+  const user = await getCurrentUser()
+  if (!user) {
+    return notFound()
+  }
+  const userId = user.id
+
+  const workspace = stateParams.workspaceId
+    ? await workspaceService.findById({ id: stateParams.workspaceId })
+    : await createFirstWorkspace(userId)
+
+  if (
+    stateParams.workspaceId &&
+    !(await hasWorkspaceAccess({
+      workspaceId: stateParams.workspaceId,
+      user,
+    }))
+  ) {
+    logger.info(
+      { userId, workspaceId: stateParams.workspaceId },
+      "user is not a member of workspace in OAuth callback",
+    )
+    return notFound()
+  }
+
+  const safeReferer = await sanitizeReferer(stateParams.referer)
+  const code = url.searchParams.get("code") ?? ""
+
+  // Resolved once and reused across every case below: a sub-account's
+  // workspace must use its reseller's app, not fall through to the platform
+  // default just because the sub-account itself owns no tenant.
+  const platformOwnerId = await resolveOwnerForWorkspace(workspace)
+
+  let authResult: AuthValue
+  let googleSheetsAuth: Oauth2AuthValue | null = null
+  switch (integrationType) {
+    case "messenger": {
+      const messengerCredential =
+        await platformCredentialService.resolveForOwner({
+          ownerId: platformOwnerId,
+          type: "messenger",
+        })
+      if (!messengerCredential) {
+        return notFound()
+      }
+
+      // Must match the redirect_uri used at authorize time — the tenant's
+      // custom domain for a tenant-owned credential, else the broker.
+      const callbackUrl = await buildProviderCallbackUrl(
+        messengerCredential,
+        "/integrations/messenger/callback",
+      )
+
+      if (stateParams.flow === "metaCatalog") {
+        await storeMetaCatalogConnection({
+          credentialConfig: messengerCredential.config,
+          code,
+          callbackUrl,
+          workspaceId: workspace.id,
+        })
+        const setupUrl = new URL(safeReferer)
+        setupUrl.searchParams.set("metaCatalog", "setup")
+        return redirect(setupUrl.toString())
+      }
+
+      // Facebook Ads OAuth is routed through this same Messenger callback; the
+      // state `flow` flag marks it. Store the Ads token and return the user to
+      // the referer (the integrations settings page) instead of the Messenger
+      // page picker.
+      if (stateParams.flow === "facebookAds") {
+        // storeFacebookAdsConnection -> integrationFacebookAdsService.upsert()
+        // calls this.audit(), which resolves userId/workspaceId from the ALS
+        // actor context. This raw OAuth route never populates it (unlike
+        // workspace-scoped action clients), so the audit call would silently
+        // no-op without this wrap.
+        await withAuditContext(
+          {
+            userId,
+            workspaceId: workspace.id,
+            ipAddress: getGuestClientIp(req.headers),
+            userAgent: req.headers.get("user-agent") ?? undefined,
+          },
+          () =>
+            storeFacebookAdsConnection({
+              credentialConfig: messengerCredential.config,
+              code,
+              callbackUrl,
+              workspaceId: workspace.id,
+            }),
+        )
+        return redirect(safeReferer)
+      }
+
+      // Per-integration messaging-ads box connect (CTWA/CTM/CTID). An API
+      // boundary: re-validate the target integration belongs to THIS
+      // workspace and matches the claimed channel before storing anything —
+      // `stateParams` is attacker-controlled (round-tripped through the
+      // Facebook OAuth `state` param).
+      if (stateParams.flow === "messagingAds") {
+        if (
+          !(
+            stateParams.messagingAdsChannel &&
+            stateParams.messagingAdsIntegrationId
+          )
+        ) {
+          logger.debug(
+            { workspaceId: workspace.id },
+            "messagingAds OAuth state is missing channel/integrationId",
+          )
+          return notFound()
+        }
+        // Connecting an ads token is a super-admin action (the connect action
+        // asserts it too). The OAuth `state` is attacker-forgeable, so a bare
+        // workspace member could otherwise round-trip a crafted state and bind
+        // their own Facebook token to a workspace integration — re-assert
+        // super-admin here at the storage boundary.
+        try {
+          await assertWorkspaceSuperAdmin(workspace.id)
+        } catch {
+          logger.info(
+            { workspaceId: workspace.id, userId },
+            "messagingAds OAuth callback: non-super-admin blocked",
+          )
+          return notFound()
+        }
+        const belongsToWorkspace =
+          await messagingAdsIntegrationBelongsToWorkspace({
+            workspaceId: workspace.id,
+            channel: stateParams.messagingAdsChannel,
+            integrationId: stateParams.messagingAdsIntegrationId,
+          })
+        if (!belongsToWorkspace) {
+          logger.info(
+            {
+              workspaceId: workspace.id,
+              channel: stateParams.messagingAdsChannel,
+              integrationId: stateParams.messagingAdsIntegrationId,
+            },
+            "messagingAds OAuth target integration does not belong to this workspace/channel",
+          )
+          return notFound()
+        }
+        await storeMessagingAdsConnection({
+          credentialConfig: messengerCredential.config,
+          code,
+          callbackUrl,
+          workspaceId: workspace.id,
+          channel: stateParams.messagingAdsChannel,
+          integrationId: stateParams.messagingAdsIntegrationId,
+        })
+        return redirect(safeReferer)
+      }
+
+      // Lead Ads re-auth: the grant just added `leads_retrieval` to the user↔app
+      // permissions (so existing page tokens gain it). Subscribe eligible pages
+      // to the `leadgen` webhook field, then return to the Lead Ads list — no
+      // token is stored and the Messenger page-picker is skipped.
+      if (stateParams.flow === "facebookLeadAds") {
+        await enableLeadgenForWorkspacePages(workspace.id)
+        return redirect(safeReferer)
+      }
+
+      // Marketing Messages grant. `withAuditContext` is required for the same
+      // reason the facebookAds branch uses it: this raw OAuth route never
+      // populates the ALS actor context, so `BaseService.audit()` would
+      // silently no-op.
+      if (stateParams.flow === "facebookMarketingMessages") {
+        await withAuditContext(
+          {
+            userId,
+            workspaceId: workspace.id,
+            ipAddress: getGuestClientIp(req.headers),
+            userAgent: req.headers.get("user-agent") ?? undefined,
+          },
+          () =>
+            storeMarketingMessagesConnection({
+              credentialConfig: messengerCredential.config,
+              code,
+              callbackUrl,
+              workspaceId: workspace.id,
+            }),
+        )
+        return redirect(safeReferer)
+      }
+
+      if (stateParams.reconnectIntegrationId) {
+        const result = await reconnectMessengerHandler({
+          credentialConfig: messengerCredential.config,
+          workspaceId: workspace.id,
+          integrationId: stateParams.reconnectIntegrationId,
+          code,
+          callbackUrl,
+        })
+        if (result.status === "success") {
+          await auditService.record({
+            userId,
+            workspaceId: workspace.id,
+            action: "update",
+            detail: "reconnected the Messenger channel",
+            ipAddress: getGuestClientIp(req.headers),
+            userAgent: req.headers.get("user-agent") ?? undefined,
+          })
+        }
+        return redirect(buildReconnectRedirectUrl(safeReferer, result))
+      }
+
+      // A plain connect (no `flow`, no `reconnectIntegrationId`) never
+      // reaches here anymore: `channels/create/messenger/route.ts` mints a
+      // `ConnectSession` and its raw `"{sessionId}.{nonce}"` state is
+      // dispatched by `handleConnectSessionCallback` before this legacy
+      // switch ever runs. Every remaining caller of this callback sets one
+      // of `stateParams.flow` or `reconnectIntegrationId`, both handled
+      // above — this is a defensive fallback for a state that should be
+      // unreachable, not a case a real request is expected to hit.
+      logger.warn(
+        { workspaceId: workspace.id, integrationType },
+        "legacy messenger OAuth callback state matched no known flow",
+      )
+      return redirect("/channels/create?error=sessionExpired")
+    }
+
+    case "instagram": {
+      const instagramCredential =
+        await platformCredentialService.resolveForOwner({
+          ownerId: platformOwnerId,
+          type: "instagram",
+        })
+      if (!instagramCredential) {
+        return notFound()
+      }
+
+      // Must match the redirect_uri used at authorize time — the tenant's
+      // custom domain for a tenant-owned credential, else the broker.
+      const callbackUrl = await buildProviderCallbackUrl(
+        instagramCredential,
+        "/integrations/instagram/callback",
+      )
+
+      // Checked before exchanging the single-use `code`: a plain connect
+      // never reaches here anymore (see the comment at the end of
+      // `case "messenger"`), so bail out before burning the code on a
+      // request that has no reconnect to apply it to.
+      if (!stateParams.reconnectIntegrationId) {
+        logger.warn(
+          { workspaceId: workspace.id, integrationType },
+          "legacy instagram OAuth callback state has no reconnectIntegrationId",
+        )
+        return redirect("/channels/create?error=sessionExpired")
+      }
+
+      const { accessToken: userToken } = await exchangeInstagramCode(
+        instagramCredential.config,
+        code,
+        callbackUrl,
+      )
+
+      const result = await reconnectInstagramHandler({
+        credentialConfig: instagramCredential.config,
+        workspaceId: workspace.id,
+        integrationId: stateParams.reconnectIntegrationId,
+        userToken,
+      })
+      if (result.status === "success") {
+        await auditService.record({
+          userId,
+          workspaceId: workspace.id,
+          action: "update",
+          detail: "reconnected the Instagram channel",
+          ipAddress: getGuestClientIp(req.headers),
+          userAgent: req.headers.get("user-agent") ?? undefined,
+        })
+      }
+      return redirect(buildReconnectRedirectUrl(safeReferer, result))
+    }
+
+    case "instagramFacebook": {
+      const instagramFacebookCredential =
+        await platformCredentialService.resolveForOwner({
+          ownerId: platformOwnerId,
+          type: "instagramFacebook",
+        })
+      if (!instagramFacebookCredential) {
+        return notFound()
+      }
+
+      // Must match the redirect_uri used at authorize time — the tenant's
+      // custom domain for a tenant-owned credential, else the broker.
+      const callbackUrl = await buildProviderCallbackUrl(
+        instagramFacebookCredential,
+        "/integrations/instagram-facebook/callback",
+      )
+
+      // Checked before exchanging the single-use `code`: a plain connect
+      // never reaches here anymore (see the comment at the end of
+      // `case "messenger"`), so bail out before burning the code on a
+      // request that has no reconnect to apply it to.
+      if (!stateParams.reconnectIntegrationId) {
+        logger.warn(
+          { workspaceId: workspace.id, integrationType },
+          "legacy instagramFacebook OAuth callback state has no reconnectIntegrationId",
+        )
+        return redirect("/channels/create?error=sessionExpired")
+      }
+
+      const userToken = await exchangeInstagramFacebookCode(
+        instagramFacebookCredential.config,
+        code,
+        callbackUrl,
+      )
+      const result = await reconnectInstagramFacebookHandler({
+        credentialConfig: instagramFacebookCredential.config,
+        workspaceId: workspace.id,
+        integrationId: stateParams.reconnectIntegrationId,
+        userToken,
+      })
+      if (result.status === "success") {
+        await auditService.record({
+          userId,
+          workspaceId: workspace.id,
+          action: "update",
+          detail: "reconnected the Instagram channel",
+          ipAddress: getGuestClientIp(req.headers),
+          userAgent: req.headers.get("user-agent") ?? undefined,
+        })
+      }
+      return redirect(buildReconnectRedirectUrl(safeReferer, result))
+    }
+
+    case "threads": {
+      const threadsCredential = await platformCredentialService.resolveForOwner(
+        {
+          ownerId: platformOwnerId,
+          type: "threads",
+        },
+      )
+      if (!threadsCredential) {
+        return notFound()
+      }
+
+      // Must match the redirect_uri used at authorize time — the tenant's
+      // custom domain for a tenant-owned credential, else the broker.
+      const callbackUrl = await buildProviderCallbackUrl(
+        threadsCredential,
+        "/integrations/threads/callback",
+      )
+      const token = await exchangeThreadsCode(
+        threadsCredential.config,
+        code,
+        callbackUrl,
+      )
+
+      if (stateParams.reconnectIntegrationId) {
+        const result = await reconnectThreadsHandler({
+          credentialConfig: threadsCredential.config,
+          callbackUrl,
+          workspaceId: workspace.id,
+          integrationId: stateParams.reconnectIntegrationId,
+          accessToken: token.accessToken,
+          expiresAt: token.expiresAt,
+        })
+        if (result.status === "success") {
+          await auditService.record({
+            userId,
+            workspaceId: workspace.id,
+            action: "update",
+            detail: "reconnected the Threads channel",
+            ipAddress: getGuestClientIp(req.headers),
+            userAgent: req.headers.get("user-agent") ?? undefined,
+          })
+        }
+        return redirect(buildReconnectRedirectUrl(safeReferer, result))
+      }
+
+      const profile = await getThreadsProfile(
+        token.accessToken,
+        threadsCredential.config.version,
+      )
+      const auth = buildThreadsAuthValue({
+        clientId: threadsCredential.config.clientId,
+        clientSecret: threadsCredential.config.clientSecret,
+        redirectUrl: callbackUrl,
+        version: threadsCredential.config.version,
+        accessToken: token.accessToken,
+        expiresAt: token.expiresAt,
+        threadsUserId: profile.id,
+        username: profile.username,
+      })
+
+      let threadsIntegrationId: string
+      try {
+        const integration = await integrationThreadsService.connect({
+          workspaceId: workspace.id,
+          ownerId: workspace.ownerId,
+          auth,
+          threadsUserId: profile.id,
+          username: profile.username,
+          name: profile.username,
+        })
+        threadsIntegrationId = integration.id
+      } catch (error) {
+        // The account is already connected — here or in another workspace
+        // (`threadsUserId` is globally unique). Surface it as the standard
+        // duplicated-channel toast instead of a 500 page. `redirect()` throws
+        // NEXT_REDIRECT, so it must stay out of the `try` above.
+        if (
+          error instanceof ChatbotXException &&
+          error.code === "channelDuplicated"
+        ) {
+          return redirect(
+            buildChannelErrorRedirectUrl(safeReferer, "duplicated"),
+          )
+        }
+        throw error
+      }
+
+      await auditService.record({
+        userId,
+        workspaceId: workspace.id,
+        action: "connect",
+        detail: `connected a new Threads channel (#${threadsIntegrationId})`,
+        ipAddress: getGuestClientIp(req.headers),
+        userAgent: req.headers.get("user-agent") ?? undefined,
+      })
+
+      return redirect(safeReferer)
+    }
+
+    case "tiktok": {
+      const tiktokCredential = await platformCredentialService.resolveForOwner({
+        ownerId: platformOwnerId,
+        type: "tiktok",
+      })
+      if (!tiktokCredential) {
+        return notFound()
+      }
+
+      // Must match the redirect_uri used at authorize time — the tenant's
+      // custom domain for a tenant-owned credential, else the broker.
+      const tiktokCallbackUrl = await buildProviderCallbackUrl(
+        tiktokCredential,
+        "/integrations/tiktok/callback",
+      )
+
+      try {
+        await connectTiktokHandler({
+          tiktokSettings: tiktokCredential.config,
+          workspaceId: workspace.id,
+          userId,
+          req,
+          redirectUrl: tiktokCallbackUrl,
+        })
+      } catch (error) {
+        // TikTok's consent screen lets a permission be unticked, and a grant
+        // without the Business Messaging scopes yields a channel that cannot
+        // send. `callbackHandler` refuses it before anything is written;
+        // relaying through `safeReferer` keeps the toast on the tenant's own
+        // domain, which a fixed settings path would lose. `redirect()` throws
+        // NEXT_REDIRECT, so it must stay out of the `try` above.
+        if (error instanceof TiktokMissingScopesError) {
+          // The toast tells the user to grant everything; only this line says
+          // WHICH permission they withheld, which is the whole of a support
+          // answer for "I accepted and it still refuses me".
+          logger.warn(
+            {
+              err: error,
+              workspaceId: workspace.id,
+              missingScopes: error.missingScopes,
+            },
+            "Refused TikTok connect: required scopes were not granted",
+          )
+          return redirect(
+            buildChannelErrorRedirectUrl(safeReferer, "missingScopes"),
+          )
+        }
+        throw error
+      }
+
+      return redirect(safeReferer)
+    }
+
+    case "zalo": {
+      const zaloCredential = await platformCredentialService.resolveForOwner({
+        ownerId: platformOwnerId,
+        type: "zalo",
+      })
+      if (!zaloCredential) {
+        return notFound()
+      }
+
+      // Must match the redirect_uri used at authorize time — the tenant's
+      // custom domain for a tenant-owned credential, else the broker.
+      const zaloRedirectUrl = await buildProviderCallbackUrl(
+        zaloCredential,
+        "/integrations/zalo/callback",
+      )
+
+      if (stateParams.reconnectIntegrationId) {
+        const result = await reconnectZaloHandler({
+          zaloSettings: zaloCredential.config,
+          workspaceId: workspace.id,
+          integrationId: stateParams.reconnectIntegrationId,
+          req,
+          callbackUrl: zaloRedirectUrl,
+        })
+        if (result.status === "success") {
+          await auditService.record({
+            userId,
+            workspaceId: workspace.id,
+            action: "update",
+            // Same wording/shape as the Messenger/Instagram reconnect calls
+            // above: this is the OAuth-popup "Reconnect" button, not the
+            // silent refresh_token-based flow that "refreshed the Zalo
+            // channel permissions" (refresh-all-channel-tokens.action.ts,
+            // refresh-zalo-tokens.ts) describes — keep those distinct.
+            detail: "reconnected the Zalo channel",
+            ipAddress: getGuestClientIp(req.headers),
+            userAgent: req.headers.get("user-agent") ?? undefined,
+          })
+        }
+        return redirect(buildReconnectRedirectUrl(safeReferer, result))
+      }
+
+      await connectZaloHandler({
+        zaloSettings: zaloCredential.config,
+        workspaceId: workspace.id,
+        userId,
+        req,
+        redirectUrl: zaloRedirectUrl,
+      })
+
+      return redirect(safeReferer)
+    }
+
+    case "facebookAds": {
+      // Facebook Ads reuses the Messenger Facebook app credential; only the
+      // requested scopes differ (see `connect.action.ts`).
+      const facebookAdsCredential =
+        await platformCredentialService.resolveForOwner({
+          ownerId: platformOwnerId,
+          type: "messenger",
+        })
+      if (!facebookAdsCredential) {
+        return notFound()
+      }
+
+      // Must match the redirect_uri used at authorize time — the tenant's
+      // custom domain for a tenant-owned credential, else the broker.
+      const callbackUrl = await buildProviderCallbackUrl(
+        facebookAdsCredential,
+        "/integrations/facebook-ads/callback",
+      )
+
+      await withAuditContext(
+        {
+          userId,
+          workspaceId: workspace.id,
+          ipAddress: getGuestClientIp(req.headers),
+          userAgent: req.headers.get("user-agent") ?? undefined,
+        },
+        () =>
+          storeFacebookAdsConnection({
+            credentialConfig: facebookAdsCredential.config,
+            code,
+            callbackUrl,
+            workspaceId: workspace.id,
+          }),
+      )
+
+      const facebookAdsIntegration =
+        await integrationFacebookAdsService.findByWorkspaceId(workspace.id)
+      if (facebookAdsIntegration) {
+        try {
+          await connectionService.attachIntegrationConnectionRow({
+            workspaceId: workspace.id,
+            provider: "facebookAds",
+            sourceId: "workspace",
+            displayName: "Facebook Ads",
+            integrationId: facebookAdsIntegration.integrationId,
+            ownerId: workspace.ownerId,
+            actorUserId: userId,
+          })
+        } catch (error) {
+          logger.error(
+            { err: normalizeError(error), workspaceId: workspace.id },
+            "Failed to attach Facebook Ads connection after OAuth callback",
+          )
+        }
+      }
+
+      return redirect(safeReferer)
+    }
+
+    case "googleCalendar": {
+      const googleCredential = await platformCredentialService.resolveForOwner({
+        ownerId: platformOwnerId,
+        type: "google",
+      })
+      if (!googleCredential) {
+        return notFound()
+      }
+
+      // Must match the redirect_uri used at authorize time — the tenant's
+      // custom domain for a tenant-owned credential, else the broker.
+      const callbackUrl = await buildProviderCallbackUrl(
+        googleCredential,
+        "/integrations/google-calendar/callback",
+      )
+      let connectStatus: "success" | "error" = "success"
+      try {
+        const connection = await exchangeAndVerifyGoogleCalendar({
+          credentialConfig: googleCredential.config,
+          req,
+          callbackUrl,
+          workspaceId: workspace.id,
+        })
+
+        const integrationId =
+          await appointmentExternalCalendarService.createGoogleFromOAuthCallback(
+            {
+              workspaceId: workspace.id,
+              auth: connection.auth,
+              providerCalendarId: connection.providerCalendarId,
+              email: connection.email,
+            },
+          )
+
+        try {
+          await connectionService.attachIntegrationConnectionRow({
+            workspaceId: workspace.id,
+            provider: "googleCalendar",
+            sourceId: connection.providerCalendarId,
+            displayName: connection.email || "Google Calendar",
+            integrationId,
+            ownerId: workspace.ownerId,
+            actorUserId: userId,
+          })
+        } catch (error) {
+          logger.error(
+            { err: normalizeError(error), workspaceId: workspace.id },
+            "Failed to attach Google Calendar connection after OAuth callback",
+          )
+        }
+      } catch (error) {
+        logger.error(
+          { err: normalizeError(error), workspaceId: workspace.id },
+          "Failed to connect Google Calendar from OAuth callback",
+        )
+        connectStatus = "error"
+      }
+
+      const resultUrl = new URL(safeReferer)
+      resultUrl.searchParams.set("externalCalendarConnect", connectStatus)
+
+      return redirect(resultUrl.toString())
+    }
+
+    case "googleSheets": {
+      const googleCredential = await platformCredentialService.resolveForOwner({
+        ownerId: platformOwnerId,
+        type: "google",
+      })
+      if (!googleCredential) {
+        return notFound()
+      }
+
+      // Must match the redirect_uri used at authorize time — the tenant's
+      // custom domain for a tenant-owned credential, else the broker. See
+      // `connect.action.ts`.
+      const callbackUrl = await buildProviderCallbackUrl(
+        googleCredential,
+        "/integrations/google-sheets/callback",
+      )
+
+      authResult = (await integrations.googleSheets.handleRequest?.({
+        config: {
+          ...googleCredential.config,
+          redirectUrl: callbackUrl,
+        },
+        req,
+      })) as unknown as Oauth2AuthValue
+      googleSheetsAuth = authResult
+      break
+    }
+
+    default:
+      return notFound()
+  }
+
+  if (!authResult) {
+    return notFound()
+  }
+
+  await db.transaction(async (tx) => {
+    const integrationId = createId()
+
+    await tx.insert(integrationModel).values({
+      id: integrationId,
+      workspaceId: workspace.id,
+      integrationType,
+    })
+
+    if (integrationType === "googleSheets" && googleSheetsAuth) {
+      await tx.insert(integrationGoogleSheetsModel).values({
+        workspaceId: workspace.id,
+        integrationId,
+        auth: googleSheetsAuth,
+      })
+    }
+  })
+
+  if (integrationType === "googleSheets") {
+    await auditService.record({
+      userId,
+      workspaceId: workspace.id,
+      action: "connect",
+      detail: "connected a new Google Sheets integration",
+      ipAddress: getGuestClientIp(req.headers),
+      userAgent: req.headers.get("user-agent") ?? undefined,
+    })
+  }
+
+  return redirect(safeReferer)
+}

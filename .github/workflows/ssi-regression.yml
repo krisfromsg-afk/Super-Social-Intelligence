@@ -1,0 +1,95 @@
+name: SSI Broad Regression Audit
+
+on:
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - 'apps/**'
+      - 'packages/**'
+      - 'integrations/**'
+      - '.github/workflows/ssi-regression.yml'
+      - 'pnpm-lock.yaml'
+
+permissions:
+  contents: read
+
+jobs:
+  integration-audit:
+    runs-on: ubuntu-latest
+    timeout-minutes: 55
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: License boundary
+        id: license
+        continue-on-error: true # Diagnostics may run, acceptance must still fail.
+        run: |
+          test ! -e apps/builder/src/enterprise
+          test ! -e packages/database/src/schema/enterprise
+          test ! -e packages/database/src/relations/enterprise
+          # Audit reachable commit history, not only the checked-out worktree.
+          # Other obsolete repository branches are not part of HEAD ancestry.
+          if git rev-list --objects HEAD | grep -E ' (apps/builder/src/enterprise/|packages/database/src/schema/enterprise/|packages/database/src/relations/enterprise/)'; then
+            echo 'STOP-SHIP: restricted source exists in reachable commit ancestry' >&2
+            exit 1
+          fi
+          if find packages apps integrations -type f -iname 'LICENSE*' -exec grep -l 'ChatbotX Commercial License' {} + | grep -q .; then
+            echo 'STOP-SHIP: unreviewed nested Commercial License (issue #4)' >&2
+            exit 1
+          fi
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: pnpm
+      - name: Install pinned dependencies
+        id: install
+        run: pnpm install --frozen-lockfile
+      - name: SSI Drizzle schema migration drift
+        id: schema_drift
+        if: steps.install.outcome == 'success'
+        continue-on-error: true
+        run: pnpm --filter @chatbotx.io/database db:check-drift
+      - name: Builder Vitest regression
+        id: builder
+        if: steps.install.outcome == 'success'
+        continue-on-error: true
+        run: pnpm --filter builder test
+      - name: SSI conversation service concurrency tests
+        id: business
+        if: steps.install.outcome == 'success'
+        continue-on-error: true
+        run: pnpm --filter @chatbotx.io/business exec vitest run src/conversation/__tests__/conversation.service.test.ts
+      - name: Business TypeScript check
+        id: business_types
+        if: steps.install.outcome == 'success'
+        continue-on-error: true
+        run: pnpm --filter @chatbotx.io/business check-types
+      - name: Worker Vitest regression
+        id: worker
+        if: steps.install.outcome == 'success'
+        continue-on-error: true
+        run: pnpm --filter worker test
+      - name: Worker TypeScript check
+        id: worker_types
+        if: steps.install.outcome == 'success'
+        continue-on-error: true
+        run: pnpm --filter worker check-types
+      - name: Enforce audit test verdict
+        if: always()
+        run: |
+          echo "Builder tests: ${{ steps.builder.outcome }}"
+          echo "Worker tests: ${{ steps.worker.outcome }}"
+          echo "Worker types: ${{ steps.worker_types.outcome }}"
+          echo "Business concurrency tests: ${{ steps.business.outcome }}"
+          echo "Business types: ${{ steps.business_types.outcome }}"
+          echo "License boundary: ${{ steps.license.outcome }}"
+          echo "Schema migration drift: ${{ steps.schema_drift.outcome }}"
+          test "${{ steps.builder.outcome }}" = "success"
+          test "${{ steps.worker.outcome }}" = "success"
+          test "${{ steps.worker_types.outcome }}" = "success"
+          test "${{ steps.business.outcome }}" = "success"
+          test "${{ steps.business_types.outcome }}" = "success"
+          test "${{ steps.license.outcome }}" = "success"
+          test "${{ steps.schema_drift.outcome }}" = "success"

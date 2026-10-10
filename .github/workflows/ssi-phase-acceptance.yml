@@ -1,0 +1,49 @@
+name: SSI Phase 00-02 Acceptance Audit
+
+# Separate from code health checks. Full feature acceptance stays red while
+# legal, database, operator approval and live-channel requirements are missing.
+on:
+  push:
+    branches: [feat/ssi-clean-history-rebuild]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  checkpoint-evidence:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+      - name: Audit source, Git ancestry and acceptance milestones
+        run: node scripts/ssi/audit-phase-0-2.mjs > phase-0-2-evidence.json
+      - name: Print acceptance tally
+        run: |
+          node -e 'const x=require("./phase-0-2-evidence.json"); console.log(JSON.stringify({commit:x.commit, summary:x.summary, releaseReady:x.strictReleaseReady, legacyFavicons:x.oldIconFilesMatchingChatbotX},null,2))'
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: ssi-phase-0-2-evidence
+          path: phase-0-2-evidence.json
+          if-no-files-found: warn
+  strict-release-gate:
+    needs: checkpoint-evidence
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+      - name: Require every milestone accepted before release merge
+        run: node scripts/ssi/audit-phase-0-2.mjs --strict > /dev/null

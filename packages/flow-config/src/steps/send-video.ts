@@ -1,0 +1,25 @@
+import { createId, zodUrlWithVariables } from "@chatbotx.io/utils"
+import { z } from "zod"
+import { uploadModes } from "../types"
+import { baseStepSchema } from "./base"
+import { buttonStepSchema } from "./button"
+import { stepTypes } from "./step-action"
+
+export const sendVideoStepSchema = baseStepSchema.extend({
+  stepType: z
+    .literal(stepTypes.enum.sendVideo)
+    .describe('Step type discriminator: "sendVideo".'),
+  mode: uploadModes,
+  url: zodUrlWithVariables(),
+  buttons: z.array(buttonStepSchema),
+})
+
+export type SendVideoStepSchema = z.infer<typeof sendVideoStepSchema>
+
+export const sendVideoStepDefaultFn = (): SendVideoStepSchema => ({
+  id: createId(),
+  stepType: stepTypes.enum.sendVideo,
+  mode: uploadModes.enum.file,
+  url: "",
+  buttons: [],
+})
