@@ -15,7 +15,7 @@ A workspace operator can connect authorized accounts, see actual inbound/outboun
 | P2.0 Community Inbox baseline | PARTIAL | Imported three-pane Inbox, real-time and filters | Desktop/mobile E2E and operational acceptance |
 | P2.1 Source badges/activity | SOURCE VERIFIED | Bot/Human/API/System outgoing attribution and recent real loaded bot messages | Do not infer flow vs LLM from senderType=bot |
 | P2.2 Human handoff | PARTIAL | Indefinite Human Only + re-enable, temporary pause, cross-tab and CAS tests | Cross-dispatcher atomic send-guard and concurrent queue/live E2E |
-| P2.3 Durable LLM/flow provenance | BLOCKED | No accepted per-message lineage | Persist flow/agent/model attribution and source IDs tied to actual delivery |
+| P2.3 Durable LLM/flow provenance | BLOCKED | Stored flow reference shown in loaded bot activity with an unverified AI-origin warning (not execution proof) | Verify durable message-to-execution/agent/model lineage, authorization and delivery-linked IDs |
 | P2.4 Three-state server policy | BLOCKED | No SSI-owned Human/Copilot/Autopilot persistence | Server-authoritative versioned mode and send claims in every dispatcher |
 | P2.5 Approval queue | BLOCKED | No accepted AI draft lifecycle | Versioned draft edit/approve/reject, expiring claim and idempotent outbox |
 | P2.6 Agent/source trace viewer | BLOCKED | Activity panel specifically does not claim traces | Workspace-scoped safe model/tool/retrieval metadata and authorization tests |

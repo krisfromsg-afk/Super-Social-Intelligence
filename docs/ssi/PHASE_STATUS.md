@@ -12,8 +12,8 @@ The acceptance script `scripts/ssi/audit-phase-0-2.mjs` and `.github/workflows/s
 | Phase | Audited result | Verified source | Remaining hard gates |
 | --- | --- | --- | --- |
 | Phase 00 · License-safe bootstrap | **PARTIAL** | Pinned Community snapshot from clean SSI ancestry, known restricted subtree exclusion, retained MIT copyright and history/source guard | Legal provenance and third-party artifacts; stale PR/cache retention; DB rehearsal; main not yet carrying application |
-| Phase 01 · Rebrand and core | **PARTIAL** | SSI package name, SVG wordmark, manifest, targeted builder types/build and migration-snapshot drift | legacy favicon assets now replaced (new build verification pending), internal namespaces, links/locales/Terms/Privacy, real PostgreSQL upgrade/rollback and staging login/worker smoke |
-| Phase 02 · Inbox and channel contracts | **PARTIAL** | Outbound source labels, loaded bot activity, indefinite Human Only and cross-tab/CAS tests | P2.3 durable AI/flow provenance; P2.4 three-state server send gate; P2.5 approval queue; P2.6 source/tool trace API; verified platform fixtures/E2E/security/rollback |
+| Phase 01 · Rebrand and core | **PARTIAL** | SSI package name, SVG wordmark, manifest, targeted builder types/build and migration-snapshot drift | six SSI favicon assets replaced and SHA-regression-guarded (build/staging acceptance still pending), internal namespaces, links/locales/Terms/Privacy, real PostgreSQL upgrade/rollback and staging login/worker smoke |
+| Phase 02 · Inbox and channel contracts | **PARTIAL** | Outbound source labels, loaded bot activity, indefinite Human Only and cross-tab/CAS tests | P2.3 verified AI/flow provenance (only unverified stored flow references now shown); P2.4 three-state server send gate; P2.5 approval queue; P2.6 source/tool trace API; verified platform fixtures/E2E/security/rollback |
 
 ## Genuine CI results for the last fully checked application baseline
 
@@ -27,7 +27,7 @@ These checks do **not** establish production PostgreSQL data preservation, live 
 ## Remaining work and merge rules
 
 1. **P0 legal/history** — [issue #4](https://github.com/krisfromsg-afk/Super-Social-Intelligence/issues/4). Preserve MIT notice; never erase the license to relicense restricted code.
-2. **P1 runtime and rebrand** — replace/retire old icons after reference check; finish public branding; validate PostgreSQL migrations, real env, session, deployment and worker.
+2. **P1 runtime and rebrand** — maintain new icon regression tests and finish public branding; validate PostgreSQL migrations, real env, session, deployment and worker.
 3. **P2 agent and channel behavior** — complete [issue #3](https://github.com/krisfromsg-afk/Super-Social-Intelligence/issues/3), especially P2.3–P2.9, with real integration tests and human-approval invariants.
 4. **No code merge / DONE declaration** for full application PR #5 until its scope clears legal, database, security and product acceptance. Passing Foundation CI alone is insufficient.
 
