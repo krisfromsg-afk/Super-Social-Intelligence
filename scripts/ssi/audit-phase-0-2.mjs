@@ -162,7 +162,10 @@ const result = {
   milestones: rows,
 }
 console.log(JSON.stringify(result, null, 2))
-if (violations.length) process.exit(2)
+if (violations.length) {
+  console.error("CHECKPOINT EVIDENCE INVARIANT FAILURE:", violations.join(" | "))
+  process.exit(2)
+}
 if (process.argv.includes("--strict") && !accepted) {
   console.error("STOP-SHIP: Phase 00-02 acceptance incomplete; see milestones and open issues #3/#4.")
   process.exit(1)
