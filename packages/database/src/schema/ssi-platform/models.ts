@@ -8,7 +8,7 @@
  */
 import { sql } from "drizzle-orm"
 import {
-  boolean, index, integer, jsonb, pgTable, text, timestamp, uniqueIndex,
+  boolean, foreignKey, index, integer, jsonb, pgTable, text, timestamp, unique, uniqueIndex,
   type AnyPgColumn,
 } from "drizzle-orm/pg-core"
 import { bigintAsString, sharedColumns, timestampConfig } from "../../partials/shared"
@@ -43,7 +43,7 @@ export const tenantModel = pgTable("Tenant", {
 
 export const customDomainModel = pgTable("CustomDomain", {
   ...sharedColumns,
-  tenantId: bigintAsString().notNull().references(() => tenantModel.id, { onDelete: "cascade" }),
+  tenantId: bigintAsString().notNull().references(() => tenantModel.id, { onDelete: "cascade", onUpdate: "cascade" }),
   domain: text().notNull(),
   status: text().notNull().default("pending"),
   verifiedAt: timestamp(timestampConfig),
@@ -67,16 +67,18 @@ export const tenantHelpItemModel = pgTable("TenantHelpItem", {
 
 export const auditLogModel = pgTable("AuditLog", {
   ...sharedColumns,
-  workspaceId: bigintAsString().notNull().references(() => workspaceModel.id, { onDelete: "cascade" }),
-  userId: bigintAsString().references(() => userModel.id, { onDelete: "set null" }),
+  workspaceId: bigintAsString().notNull(),
+  userId: bigintAsString(),
   action: text().notNull(),
-  detail: text(),
+  detail: text().notNull(),
   ipAddress: text(),
   // The existing audit worker writes these fields; both are present in
   // 20260816085646_audit_log_where_and_index/migration.sql.
   userAgent: text(),
   source: text(),
 }, (t) => [
+  foreignKey({ name: "AuditLog_workspaceId_fkey", columns: [t.workspaceId], foreignColumns: [workspaceModel.id] }).onDelete("cascade").onUpdate("cascade"),
+  foreignKey({ name: "AuditLog_userId_fkey", columns: [t.userId], foreignColumns: [userModel.id] }).onDelete("set null").onUpdate("cascade"),
   index("AuditLog_workspaceId_createdAt_id_idx").on(
     t.workspaceId, t.createdAt.desc().nullsLast(), t.id.desc().nullsLast(),
   ),
@@ -94,7 +96,7 @@ export const workspaceUsageModel = pgTable("WorkspaceUsage", {
   botMessagesUsed: integer().notNull().default(0),
   macUsed: integer().notNull().default(0),
   syncedAt: timestamp(timestampConfig).notNull().defaultNow(),
-}, (t) => [uniqueIndex("WorkspaceUsage_workspaceId_key").on(t.workspaceId)])
+}, (t) => [unique("WorkspaceUsage_workspaceId_key").on(t.workspaceId)])
 
 export const userQuotaModel = pgTable("UserQuota", {
   ...sharedColumns,
@@ -118,7 +120,8 @@ export const userQuotaModel = pgTable("UserQuota", {
   channelsTornDownAt: timestamp(timestampConfig),
   syncedAt: timestamp(timestampConfig).notNull().defaultNow(),
 }, (t) => [
-  uniqueIndex("UserQuota_userId_key").on(t.userId),
+  unique("UserQuota_userId_key").on(t.userId),
+  index("UserQuota_channelsTornDownAt_idx").on(t.channelsTornDownAt),
   index("UserQuota_due_expired_trial_idx").on(t.userId).where(sql`"channelsTornDownAt" IS NULL AND "planStatus" = 'trial'`),
 
 ])
