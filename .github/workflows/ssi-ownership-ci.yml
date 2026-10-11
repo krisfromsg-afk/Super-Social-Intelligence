@@ -1,0 +1,47 @@
+name: SSI Ownership Safety CI
+
+on:
+  push:
+    branches: ['feat/ssi-*']
+    paths:
+      - 'apps/worker/src/chat/**'
+      - 'apps/builder/src/features/chat/chat-panes.tsx'
+      - 'apps/builder/src/features/ssi-inbox/**'
+      - 'apps/builder/src/features/conversations/actions/set-ssi-ai-mode.action.ts'
+      - 'apps/builder/__tests__/message-thread-pane-scroll.test.tsx'
+      - 'packages/business/src/conversation/**'
+      - '.github/workflows/ssi-ownership-ci.yml'
+  pull_request:
+    paths:
+      - 'apps/worker/src/chat/**'
+      - 'apps/builder/src/features/chat/chat-panes.tsx'
+      - 'apps/builder/src/features/ssi-inbox/**'
+      - 'apps/builder/src/features/conversations/actions/set-ssi-ai-mode.action.ts'
+      - 'apps/builder/__tests__/message-thread-pane-scroll.test.tsx'
+      - 'packages/business/src/conversation/**'
+      - '.github/workflows/ssi-ownership-ci.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  ownership-invariants:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: pnpm
+      - name: Install exact workspace versions
+        run: pnpm install --frozen-lockfile
+      - name: SSI server control and conversation CAS tests
+        run: pnpm --filter @chatbotx.io/business exec vitest run src/conversation/__tests__/ssi-ai-control.test.ts src/conversation/__tests__/conversation.service.test.ts
+      - name: SSI worker last-mile guard and tenant authorization
+        run: pnpm --filter worker exec vitest run src/chat/utils/ssi-outbound-policy.test.ts
+      - name: SSI client mode and browser-pane isolation
+        run: pnpm --filter builder exec vitest run src/features/ssi-inbox/__tests__/ui-ai-control.test.ts __tests__/message-thread-pane-scroll.test.tsx
