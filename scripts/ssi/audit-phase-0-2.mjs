@@ -70,6 +70,12 @@ if (!contains("apps/builder/src/features/messages/components/message-item.tsx", 
     !contains("apps/builder/src/features/messages/message-list.tsx", "<MessageItem")) {
   violations.push("SSI outbound provenance helper is not wired to visible Inbox messages")
 }
+const ssiSendFile = "apps/worker/src/chat/handlers/send-message.ts"
+const ssiSendSource = exists(ssiSendFile) ? readFileSync(relative(ssiSendFile), "utf8") : ""
+if ((ssiSendSource.match(/await assertSsiAutomatedDispatchAllowed\\(/g) ?? []).length < 2 ||
+    !contains("packages/business/src/conversation/service.ts", "async setSsiAiMode(")) {
+  violations.push("SSI versioned control / two provider dispatch gates not correctly wired")
+}
 if (!contains("apps/builder/src/features/conversations/actions/keep-human-only.action.ts", "botResumeAt: null") ||
     !contains("apps/builder/src/features/chat/chat-panes.tsx", "keepHumanOnlyAction")) {
   violations.push("Durable Human Only action is not wired into Inbox UI")
@@ -135,8 +141,15 @@ record("02", "P2-3", "blocked", "Message-to-model/flow durable verified provenan
   ["apps/builder/src/features/ssi-inbox/bot-activity-panel.tsx",
     "apps/builder/src/features/ssi-inbox/message-provenance.ts"],
   "Stored flow references now appear cautiously; LLM/tool/RAG execution still unverified")
-record("02", "P2-4", "blocked", "Persistent Human/Copilot/Autopilot modes and server-enforced send policy",
-  ["docs/ssi/PHASE02_COMPLETION_PLAN.md"], "Three-state SSI policy, server-wide dispatch guard and proofs absent")
+record("02", "P2-4", "partial", "Versioned Human/Copilot/Autopilot control with pre-dispatch checks",
+  ["packages/business/src/conversation/ssi-ai-control.ts",
+    "packages/business/src/conversation/service.ts",
+    "apps/builder/src/features/conversations/actions/set-ssi-ai-mode.action.ts",
+    "apps/builder/src/features/chat/chat-panes.tsx",
+    "apps/worker/src/chat/utils/ssi-outbound-policy.ts",
+    "apps/worker/src/chat/handlers/send-message.ts",
+    "packages/business/src/conversation/__tests__/ssi-ai-control.test.ts"],
+  "Central chokepoint gate and CAS exist; final atomic outbox/dispatch lease, every-channel race and tenant staging E2E remain unaccepted")
 record("02", "P2-5", "blocked", "Idempotent AI draft approve/edit/reject queue",
   ["docs/ssi/PHASE02_COMPLETION_PLAN.md"], "No accepted implementation or E2E for lifecycle/stale approval")
 record("02", "P2-6", "blocked", "Authorized model/tool/retrieval trace viewer",

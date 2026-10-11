@@ -16,7 +16,7 @@ A workspace operator can connect authorized accounts, see actual inbound/outboun
 | P2.1 Source badges/activity | SOURCE VERIFIED | Bot/Human/API/System outgoing attribution and recent real loaded bot messages | Do not infer flow vs LLM from senderType=bot |
 | P2.2 Human handoff | PARTIAL | Indefinite Human Only + re-enable, temporary pause, cross-tab and CAS tests | Cross-dispatcher atomic send-guard and concurrent queue/live E2E |
 | P2.3 Durable LLM/flow provenance | BLOCKED | Stored flow reference shown in loaded bot activity with an unverified AI-origin warning (not execution proof) | Verify durable message-to-execution/agent/model lineage, authorization and delivery-linked IDs |
-| P2.4 Three-state server policy | BLOCKED | No SSI-owned Human/Copilot/Autopilot persistence | Server-authoritative versioned mode and send claims in every dispatcher |
+| P2.4 Three-state server policy | PARTIAL | SSI-authored versioned JSONB control (workspace-scoped CAS), Inbox mode buttons, fresh DB gate before two central channel-send paths; Copilot deliberately cannot auto-send | Signed-off final atomic send claim/outbox, retries/races across every dispatcher, DB staging and tenant E2E |
 | P2.5 Approval queue | BLOCKED | No accepted AI draft lifecycle | Versioned draft edit/approve/reject, expiring claim and idempotent outbox |
 | P2.6 Agent/source trace viewer | BLOCKED | Activity panel specifically does not claim traces | Workspace-scoped safe model/tool/retrieval metadata and authorization tests |
 | P2.7 Channel contracts | PARTIAL | Community adapters with many unit fixtures | SSI OAuth/scope, webhook/replay, rate-limit, messaging window, live credential matrix |
@@ -40,3 +40,7 @@ A workspace operator can connect authorized accounts, see actual inbound/outboun
 - [Strict release gate](https://github.com/krisfromsg-afk/Super-Social-Intelligence/actions/runs/38026788971) intentionally fails until all acceptance cases are proven.
 
 **Merge order:** clear P0 license/history issue #4 → complete Phase 1 branding/runtime/database staging checks → implement and test P2.3–P2.9 → finish channel/tenant E2E and production release audit → merge approved code. Legacy PR #1/#2 are CLOSED and MUST NOT be revived or used as contaminated parents.
+
+## SSI P2.4 incremental implementation — 2026-10-11
+
+See [AI ownership checkpoint](AI_OWNERSHIP_IMPLEMENTATION.md). Commits `d6184b3`, `e505c3a` and `4229baf` add a per-workspace last-mile gate, versioned mode update and Inbox controls. This is **PARTIAL, not production acceptance**. Copilot is a no-auto-send state until draft/approval workflows exist. A pre-dispatch query cannot revoke an already in-flight provider request, so **atomic outbox claim and idempotent delivery remain hard blockers**, not optional polish. Live PostgreSQL and channel-credential evidence have not been recorded.

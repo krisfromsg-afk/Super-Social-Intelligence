@@ -57,3 +57,10 @@ Implemented on canonical branch following the first audit checkpoint: replaced s
 - The automation activity panel labels those loaded messages **Flow reference recorded · AI origin unverified**. It does not expose model/tool prompts or invent retrieval sources.
 - New focused tests cover flow attribution, malformed metadata, and non-bot messages. The SSI favicon regression test now rejects restoration of the six original ChatbotX file blob hashes.
 - **Unchanged status:** Phase 00–02 is NOT ACCEPTED; P2.3–P2.6 require persisted verified executions, enforced send modes, tenant tests and a draft approval/outbox system.
+
+## 2026-10-11 Phase 2 ownership increment (source checkpoint, not release certification)
+
+- `d6184b3`: server-authoritative **fresh workspace-scoped read** before automated sends at `sendMessageToChannel` and `sendFlowStepToChannel`. The first gates outgoing `senderType=bot` only, protecting manual human/API sends. Unrecognized or malformed SSI mode JSON fails closed. Worker and business unit tests cover missing row, tenant scoping, malformed policies and disabled conversations.
+- `e505c3a`: `setSsiAiMode` writes the versioned `ssiAiControl` JSONB and the existing `botEnabled` flags atomically, with a version compare-and-set. User-facing mode buttons require an authorized workspace action. Copilot disables automated sends until its required approval queue exists.
+- `4229baf`: client-only pane regression test mocks the new server action to avoid loading Postgres/env modules in a browser test.
+- **P2.4 now partial**. Final atomic send claims, exactly-once outbox, tenant/channel/provider E2E and in-flight handoff safety are not proven. Phase 0–2 **NOT DONE**; legal/provenance issue #4 remains. Follow the [implementation notes](AI_OWNERSHIP_IMPLEMENTATION.md).
