@@ -164,7 +164,11 @@ export function MessageThreadPane({
             botEnabled: data.botEnabled,
             botResumeAt: null,
             additionalAttributes: {
-              ...(activeConversation.additionalAttributes ?? {}),
+              ...(activeConversation.additionalAttributes &&
+              typeof activeConversation.additionalAttributes === "object" &&
+              !Array.isArray(activeConversation.additionalAttributes)
+                ? activeConversation.additionalAttributes
+                : {}),
               ssiAiControl: { mode: data.mode, version: data.version },
             },
           })
