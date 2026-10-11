@@ -22,6 +22,10 @@ vi.mock("@/features/conversations/actions/keep-human-only.action", () => ({
   keepHumanOnlyAction: { bind: () => vi.fn() },
 }))
 
+vi.mock("@/features/conversations/actions/set-ssi-ai-mode.action", () => ({
+  setSsiAiModeAction: { bind: () => vi.fn() },
+}))
+
 vi.mock("@/features/ssi-inbox/bot-activity-panel", () => ({
   SsiBotActivityPanel: () => null,
 }))
