@@ -110,7 +110,7 @@ export function MessageThreadPane({
   // so "Bot is active" would be misleading.
   const isThreadOnStandby =
     useThreadControl(activeListConversation)?.state === "standby"
-  const ssiAiControl = readSsiUiControl(activeConversation?.additionalAttributes)
+  const ssiAiControl = readSsiUiControl((activeListConversation ?? activeConversation)?.additionalAttributes)
   const ssiModes = [
     { mode: "human_only", label: "Human Only" },
     { mode: "copilot", label: "Copilot · drafts only" },
