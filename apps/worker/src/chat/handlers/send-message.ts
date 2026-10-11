@@ -60,6 +60,7 @@ import {
   shouldSuppressRetryableChannelError,
   willSendRetry,
 } from "../utils/retry"
+import { assertSsiAutomatedDispatchAllowed } from "../utils/ssi-outbound-policy"
 import { reconcileChannelSendError } from "./channel-send-error-reconcilers"
 
 // Keep private comment replies aligned with sendMessageToChannel's isPrivateReply
@@ -208,6 +209,12 @@ export async function sendMessageToChannel(
   // re-read only when the thread has routing state (zero queries otherwise).
   let routingContactInbox = contactInbox
   try {
+    if (message.senderType === "bot") {
+      await assertSsiAutomatedDispatchAllowed({
+        workspaceId: conversation.workspaceId,
+        conversationId: conversation.id,
+      })
+    }
     routingContactInbox = await threadControlService.refreshForRouting({
       workspaceId: conversation.workspaceId,
       contactInbox,
@@ -893,6 +900,12 @@ export async function sendFlowStepToChannel({
    */
   isTemplateMessage?: boolean
 }): Promise<OutgoingSendResult> {
+  // Every flow/template send on this path is automated, including queued jobs
+  // built before Human Only or Copilot takeover. Never trust the stale row.
+  await assertSsiAutomatedDispatchAllowed({
+    workspaceId: conversation.workspaceId,
+    conversationId: conversation.id,
+  })
   // The caller's row is the flow step as it was loaded; a handover may have
   // landed since. Re-read the current routing state (zero queries when the
   // thread has none) before the gate and the implicit-take record, exactly as
