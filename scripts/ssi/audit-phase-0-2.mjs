@@ -72,7 +72,7 @@ if (!contains("apps/builder/src/features/messages/components/message-item.tsx", 
 }
 const ssiSendFile = "apps/worker/src/chat/handlers/send-message.ts"
 const ssiSendSource = exists(ssiSendFile) ? readFileSync(relative(ssiSendFile), "utf8") : ""
-if ((ssiSendSource.match(/await assertSsiAutomatedDispatchAllowed\\(/g) ?? []).length < 2 ||
+if ((ssiSendSource.split("await assertSsiAutomatedDispatchAllowed(").length - 1) < 2 ||
     !contains("packages/business/src/conversation/service.ts", "async setSsiAiMode(")) {
   violations.push("SSI versioned control / two provider dispatch gates not correctly wired")
 }
