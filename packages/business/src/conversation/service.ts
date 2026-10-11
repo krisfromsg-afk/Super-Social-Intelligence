@@ -55,6 +55,7 @@ import {
 } from "@chatbotx.io/worker-config"
 import type { PgUpdateSetSource } from "drizzle-orm/pg-core"
 import { BaseService } from "../base.service"
+import type { SsiAiMode } from "./ssi-ai-control"
 import { contactService } from "../contact"
 import type {
   ContactInboxTrackingData,
@@ -1264,6 +1265,85 @@ class ConversationService extends BaseService {
     })
 
     return claimed
+  }
+
+  /**
+   * Compare-and-set SSI AI ownership on the existing Conversation row.
+   *
+   * Stored inside additionalAttributes so upgrading the control itself does
+   * not depend on a destructive migration. This update uses one PostgreSQL
+   * statement to change the control version and the legacy bot flag together.
+   * No stale tab may revert a newer Human Only/Copilot choice.
+   *
+   * Copilot is intentionally draft-only / no automatic dispatch until a
+   * separate approval outbox is implemented and audited.
+   */
+  async setSsiAiMode(props: {
+    workspaceId: string
+    id: string
+    mode: SsiAiMode
+    expectedVersion: number
+    userId: string
+  }): Promise<{ mode: SsiAiMode; version: number; botEnabled: boolean }> {
+    const { workspaceId, id, mode, expectedVersion, userId } = props
+    if (!Number.isSafeInteger(expectedVersion) || expectedVersion < 0 ||
+        expectedVersion >= 2147483647) {
+      throw new Error("Invalid SSI AI control version")
+    }
+    const version = expectedVersion + 1
+    const botEnabled = mode === "autopilot"
+    const control = {
+      mode,
+      version,
+      updatedAt: new Date().toISOString(),
+      updatedBy: userId,
+    }
+    const sourceAttributes = sql`COALESCE(${conversationModel.additionalAttributes}, '{}'::jsonb)`
+    const nextAttributes = botEnabled
+      ? sourceAttributes
+      : sql`(${sourceAttributes} - 'challenge')`
+    const [updated] = await db
+      .update(conversationModel)
+      .set({
+        botEnabled,
+        botResumeAt: null,
+        additionalAttributes: sql`jsonb_set(${nextAttributes}, '{ssiAiControl}', ${JSON.stringify(control)}::jsonb, true)`,
+      })
+      .where(
+        and(
+          eq(conversationModel.id, id),
+          eq(conversationModel.workspaceId, workspaceId),
+          sql`COALESCE((${conversationModel.additionalAttributes}->'ssiAiControl'->>'version')::int, 0) = ${expectedVersion}`,
+        ),
+      )
+      .returning({ id: conversationModel.id })
+
+    if (!updated) {
+      throw new Error("SSI mode changed or conversation is unavailable; refresh and retry")
+    }
+
+    if (!botEnabled) {
+      try {
+        await smartDelayService.cancelQuickReplyFollowUps({
+          tx: db,
+          workspaceId,
+          conversationIds: [id],
+        })
+      } catch (error) {
+        logger.warn({ err: error, workspaceId, conversationId: id },
+          "Unable to cancel queued quick replies after SSI AI takeover")
+      }
+    }
+
+    await this.invalidate({ workspaceId, ids: [id] })
+    publishToWorkspaceParty(workspaceId, {
+      eventType: RealtimeEventType.conversationUpdated,
+      data: {
+        conversationIds: [id],
+        changes: { botEnabled, botResumeAt: null },
+      },
+    })
+    return { mode, version, botEnabled }
   }
 
   async updateBotEnabled(props: {

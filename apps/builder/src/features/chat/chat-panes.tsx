@@ -15,6 +15,7 @@ import { ContactInboxPanel } from "../contacts/contact-inbox-panel"
 import { disableBotAction } from "../conversations/actions/disable-bot.action"
 import { enableBotAction } from "../conversations/actions/enable-bot.action"
 import { keepHumanOnlyAction } from "../conversations/actions/keep-human-only.action"
+import { setSsiAiModeAction } from "../conversations/actions/set-ssi-ai-mode.action"
 import ConversationList from "../conversations/conversation-list"
 import { useThreadControl } from "../conversations/hooks/use-thread-control"
 import { useThreadReadTracking } from "../conversations/hooks/use-thread-read-tracking"
@@ -28,6 +29,7 @@ import MessageHead from "../messages/message-head"
 import { MessageList } from "../messages/message-list"
 import { useChatStore } from "./store/chat-store-provider"
 import { SsiBotActivityPanel } from "@/features/ssi-inbox/bot-activity-panel"
+import { readSsiUiControl } from "@/features/ssi-inbox/ui-ai-control"
 
 /**
  * The inbox's three panes, split out of `chat-layout` so the layout file only
@@ -108,6 +110,12 @@ export function MessageThreadPane({
   // so "Bot is active" would be misleading.
   const isThreadOnStandby =
     useThreadControl(activeListConversation)?.state === "standby"
+  const ssiAiControl = readSsiUiControl(activeConversation?.additionalAttributes)
+  const ssiModes = [
+    { mode: "human_only", label: "Human Only" },
+    { mode: "copilot", label: "Copilot · drafts only" },
+    { mode: "autopilot", label: "Autopilot" },
+  ] as const
 
   const { execute: disableBot, isExecuting: isDisablingBot } = useAction(
     disableBotAction.bind(null, workspaceId),
@@ -147,6 +155,27 @@ export function MessageThreadPane({
     },
   )
 
+  const { execute: setSsiMode, isExecuting: isSettingSsiMode } = useAction(
+    setSsiAiModeAction.bind(null, workspaceId),
+    {
+      onSuccess: ({ data }) => {
+        if (data && activeConversation) {
+          updateConversation(activeConversation.id, {
+            botEnabled: data.botEnabled,
+            botResumeAt: null,
+            additionalAttributes: {
+              ...(activeConversation.additionalAttributes ?? {}),
+              ssiAiControl: { mode: data.mode, version: data.version },
+            },
+          })
+        }
+      },
+      onError: ({ error }) => {
+        toast.error(error.serverError ?? "Unable to change AI mode; refresh the conversation")
+      },
+    },
+  )
+
   const { execute: keepHumanOnly, isExecuting: isKeepingHumanOnly } = useAction(
     keepHumanOnlyAction.bind(null, workspaceId),
     {
@@ -182,6 +211,8 @@ export function MessageThreadPane({
               aria-label="Conversation bot controls"
               className="flex shrink-0 flex-wrap gap-2 border-b px-3 py-2"
             >
+              {!ssiAiControl && (
+                <>
               {isConversationActive(activeConversation) ? (
                 <Button
                   disabled={isDisablingBot || isKeepingHumanOnly || isEnablingBot}
@@ -218,6 +249,36 @@ export function MessageThreadPane({
                   Human only (no auto-resume)
                 </Button>
               )}
+                </>
+              )}
+              <div
+                aria-label="SSI AI ownership mode"
+                className="flex flex-wrap items-center gap-1"
+                role="group"
+              >
+                {ssiModes.map(({ mode, label }) => (
+                  <Button
+                    aria-pressed={ssiAiControl?.mode === mode}
+                    disabled={isSettingSsiMode}
+                    key={mode}
+                    onClick={() => setSsiMode({
+                      conversationId: activeConversation.id,
+                      expectedVersion: ssiAiControl?.version ?? 0,
+                      mode,
+                    })}
+                    size="sm"
+                    type="button"
+                    variant={ssiAiControl?.mode === mode ? "default" : "outline"}
+                  >
+                    {label}
+                  </Button>
+                ))}
+                <span className="text-muted-foreground text-xs">
+                  {ssiAiControl
+                    ? "Versioned workspace control"
+                    : "Enable versioned AI control"}
+                </span>
+              </div>
             </div>
           )}
           <MessageList />

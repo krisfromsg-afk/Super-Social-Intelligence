@@ -1297,3 +1297,45 @@ describe("ConversationService.ensureActive manual-takeover race", () => {
     expect(mocks.updateSet).not.toHaveBeenCalled()
   })
 })
+
+describe("SSI CAS AI ownership writes", () => {
+  test("atomically disables bot dispatch for Copilot with a versioned control", async () => {
+    mocks.updateReturning.mockResolvedValueOnce([{ id: "conv-1" }])
+    const result = await conversationService.setSsiAiMode({
+      workspaceId: WORKSPACE_ID,
+      id: "conv-1",
+      expectedVersion: 0,
+      mode: "copilot",
+      userId: "user-1",
+    })
+    expect(result).toEqual({ mode: "copilot", version: 1, botEnabled: false })
+    expect(mocks.updateSet).toHaveBeenCalledWith(
+      expect.objectContaining({ botEnabled: false, botResumeAt: null }),
+    )
+    expect(mocks.updateWhere).toHaveBeenCalled()
+    expect(mocks.cancelQuickReplyFollowUps).toHaveBeenCalled()
+  })
+
+  test("fails a stale concurrent mode change without publishing", async () => {
+    mocks.updateReturning.mockResolvedValueOnce([])
+    await expect(conversationService.setSsiAiMode({
+      workspaceId: WORKSPACE_ID,
+      id: "conv-1",
+      expectedVersion: 3,
+      mode: "autopilot",
+      userId: "user-1",
+    })).rejects.toThrow("SSI mode changed")
+    expect(mocks.broadcastToWorkspaceParty).not.toHaveBeenCalled()
+  })
+
+  test("rejects unsafe numeric versions before querying", async () => {
+    await expect(conversationService.setSsiAiMode({
+      workspaceId: WORKSPACE_ID,
+      id: "conv-1",
+      expectedVersion: -1,
+      mode: "human_only",
+      userId: "user-1",
+    })).rejects.toThrow("Invalid SSI AI control version")
+    expect(mocks.updateSet).not.toHaveBeenCalled()
+  })
+})
