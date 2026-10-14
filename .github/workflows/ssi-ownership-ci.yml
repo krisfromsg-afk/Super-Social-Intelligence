@@ -53,7 +53,7 @@ jobs:
         run: node --test scripts/ssi/__tests__/mode-action-permissions.test.mjs
       - name: SSI Copilot staging state and rights
         run: |
-          pnpm --filter @chatbotx.io/business exec vitest run src/conversation/__tests__/ssi-copilot-draft-state.test.ts
+          pnpm --filter @chatbotx.io/business exec vitest run src/conversation/__tests__/ssi-copilot-draft-state.test.ts src/conversation/__tests__/ssi-copilot-draft-service.test.ts
           pnpm --filter builder exec vitest run src/features/conversations/actions/__tests__/ssi-copilot-draft-permissions.test.ts
       - name: SSI server-mode activation authorization
         run: pnpm --filter builder exec vitest run src/features/conversations/actions/__tests__/ssi-ai-mode-permissions.test.ts
