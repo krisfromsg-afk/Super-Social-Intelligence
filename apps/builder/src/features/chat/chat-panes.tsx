@@ -29,6 +29,7 @@ import MessageHead from "../messages/message-head"
 import { MessageList } from "../messages/message-list"
 import { useChatStore } from "./store/chat-store-provider"
 import { SsiBotActivityPanel } from "@/features/ssi-inbox/bot-activity-panel"
+import { SsiCopilotDraftPanel } from "@/features/ssi-inbox/copilot-draft-panel"
 import { readSsiUiControl } from "@/features/ssi-inbox/ui-ai-control"
 
 /**
@@ -321,6 +322,7 @@ export function ContactDetailPane({
       {activeConversation && (
         <div className="flex min-h-0 flex-col gap-3">
           <SsiBotActivityPanel conversation={activeConversation} />
+          <SsiCopilotDraftPanel conversation={activeConversation} workspaceId={workspaceId} />
           <ContactInboxPanel
             activeConversationId={activeConversation.id}
             workspaceId={workspaceId}
