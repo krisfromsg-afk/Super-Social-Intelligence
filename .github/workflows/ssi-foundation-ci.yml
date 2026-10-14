@@ -71,6 +71,25 @@ jobs:
         run: pnpm --filter builder check-types
       - name: Build builder
         run: pnpm --filter builder build
+      - name: Validate generated local env and Docker DNS configuration
+        run: |
+          node scripts/ssi/bootstrap-local-env.mjs
+          test -s .env
+          docker compose -f docker-compose.dev.yml config --quiet
+          docker compose -f docker-compose.dev.yml config --format json | node -e '
+            const fs = require("node:fs")
+            const config = JSON.parse(fs.readFileSync(0, "utf8"))
+            for (const service of ["builder", "worker", "realtime"]) {
+              const env = config.services?.[service]?.environment
+              if (!env?.DATABASE_URL?.includes("@postgres:5432/")) throw Error(service + ": database must use Docker DNS")
+              if (env.REDIS_URL !== "redis://redis:6379") throw Error(service + ": Redis must use Docker DNS")
+              if (env.S3_ENDPOINT !== "http://filesystem:9000") throw Error(service + ": storage must use Docker DNS")
+            }
+          '
+          if node scripts/ssi/bootstrap-local-env.mjs; then
+            echo "ERROR: local bootstrap overwrote an existing environment" >&2
+            exit 1
+          fi
       - name: Enforce SSI licensing stop-ship
         if: always()
         run: |
