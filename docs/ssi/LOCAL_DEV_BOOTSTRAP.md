@@ -70,3 +70,7 @@ The signup screen no longer silently falls back to the upstream vendor's Terms/P
 ### Docker port and password safety
 
 The development Compose manifests publish external ports **only on `127.0.0.1`**, not on every interface. PostgreSQL and object storage refuse missing required secrets; the JS executor requires a non-empty token. Generate a private `.env` with `pnpm ssi:bootstrap` before invoking Compose. These boundaries are verified in CI but are not a production TLS, firewall, reverse-proxy, or secret-manager configuration. If a remote team member needs access, use a deliberate authenticated HTTPS reverse proxy or SSH tunnel; do not remove the loopback binding casually.
+
+### Tracked environment template has no usable credentials
+
+The checked-in `.env.example` now leaves authentication/encryption/storage/executor/realtime secrets **blank**, and its PostgreSQL URL explicitly contains a non-working `replace-me` password. **Do not run by copying it unchanged**. Use `pnpm ssi:bootstrap` on an isolated local checkout, or supply distinct secrets through an approved secret manager in staging/production. Template credential guard runs in Foundation CI.
