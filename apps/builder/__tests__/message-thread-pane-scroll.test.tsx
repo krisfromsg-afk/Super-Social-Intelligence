@@ -30,6 +30,11 @@ vi.mock("@/features/ssi-inbox/bot-activity-panel", () => ({
   SsiBotActivityPanel: () => null,
 }))
 
+// Staging panel uses server actions; isolate this layout-only regression test.
+vi.mock("@/features/ssi-inbox/copilot-draft-panel", () => ({
+  SsiCopilotDraftPanel: () => null,
+}))
+
 // Read-tracking rules are covered in use-thread-read-tracking.test.tsx; here
 // only the wiring (handlers land on the thread column) is asserted.
 const threadClickCaptureMock = vi.fn()
