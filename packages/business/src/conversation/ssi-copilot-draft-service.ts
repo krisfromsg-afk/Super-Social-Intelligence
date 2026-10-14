@@ -48,7 +48,11 @@ export const ssiCopilotDraftService = {
       ? control as Record<string, unknown> : null
     if (row.botEnabled || c?.mode !== "copilot" || typeof c?.version !== "number") return null
     if (draft === "invalid") throw new Error("Corrupt Copilot draft; operator repair required")
-    return draft && draft.modeVersion === c.version ? draft : null
+    // Return stale drafts for an authorized editor to revise, never to approve.
+    // Review CAS requires the original modeVersion to match the current mode.
+    // Hiding stale drafts made Save's expectedVersion=0 permanently conflict
+    // after Copilot -> Human Only -> Copilot transitions.
+    return draft
   },
 
   async save(props: {

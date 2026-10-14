@@ -22,3 +22,7 @@ The metadata model is a temporary single-record stage and overwrites previous ve
 ## API confidentiality boundary
 
 The `ssiCopilotDraft` staging field is private: public/workspace-token and private Inbox conversation list/single endpoints explicitly redact it before returning a conversation. The shared Zod `conversationResource` additionally strips it at the response-validation boundary. Dedicated draft actions require full `contacts` permission or super-admin rights, excluding support impersonation and assigned-only agents until assigned-scope authorization exists. Dedicated regression tests cover the redaction. This limits the known conversation serialization paths; broader API/telemetry and database access still require release security review.
+
+### Re-entering Copilot after a Human Only transition
+
+If a conversation switches out of Copilot and returns, the original staged draft is still **readable only to authorized editors** but marked stale. Review/approval is disabled in the UI, and the database will reject a stale-mode approval. An operator can explicitly save a fresh revision with the new mode version; this fixes a CAS dead-end where hiding the old draft caused an endless version-0 conflict. The old revision is overwritten by this interim single-slot storage, which is why append-only audit history remains a release blocker.

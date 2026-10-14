@@ -115,7 +115,7 @@ describe("SSI Copilot staging service (NO dispatch)", () => {
     })
     await expect(ssiCopilotDraftService.get({
       workspaceId: "123", conversationId: "456",
-    })).resolves.toBeNull()
+    })).resolves.toEqual(data)
     mocks.findFirst.mockResolvedValueOnce({
       botEnabled: false,
       additionalAttributes: { ssiAiControl: { mode: "human_only", version: 4 }, ssiCopilotDraft: data },

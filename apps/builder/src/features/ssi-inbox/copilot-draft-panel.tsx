@@ -91,6 +91,7 @@ function SsiCopilotDraftEditor({
   }, [conversationId, load])
 
   const busy = isLoading || isSaving || isReviewing
+  const stale = draft !== null && draft.modeVersion !== modeVersion
   return (
     <section
       aria-label="SSI Copilot staging"
@@ -116,6 +117,12 @@ function SsiCopilotDraftEditor({
       <p className="mt-1 text-muted-foreground text-xs">
         {draft ? `Draft v${draft.version} · ${draft.status.replaceAll("_", " ")}` : "No staged draft"}
       </p>
+      {stale && (
+        <p className="mt-2 text-amber-700 dark:text-amber-300 text-xs">
+          This draft belongs to an earlier Copilot mode. It cannot be approved.
+          Save a new revision before reviewing.
+        </p>
+      )}
       {error && <p role="alert" className="mt-2 text-destructive text-xs">{error}</p>}
       <div className="mt-2 flex flex-wrap gap-2">
         <Button
@@ -127,7 +134,7 @@ function SsiCopilotDraftEditor({
             expectedDraftVersion: draft?.version ?? 0, text,
           })}
         >Save for review</Button>
-        {draft?.status === "pending" && (
+        {draft?.status === "pending" && !stale && (
           <>
             <Button size="sm" variant="outline" type="button" disabled={busy}
               onClick={() => review({
