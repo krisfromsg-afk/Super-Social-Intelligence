@@ -90,6 +90,8 @@ jobs:
             echo "ERROR: local bootstrap overwrote an existing environment" >&2
             exit 1
           fi
+      - name: Validate local config diagnostic without exposing secrets
+        run: pnpm ssi:doctor
       - name: Enforce SSI licensing stop-ship
         if: always()
         run: |

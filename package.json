@@ -4,6 +4,7 @@
   "scripts": {
     "build": "turbo build",
     "ssi:bootstrap": "node scripts/ssi/bootstrap-local-env.mjs",
+    "ssi:doctor": "node scripts/ssi/doctor.mjs",
     "dev": "turbo dev",
     "fix": "ultracite fix --unsafe",
     "lint": "pnpm check:agent-instructions && turbo run lint && ultracite check",

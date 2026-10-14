@@ -17,6 +17,9 @@ git checkout feat/ssi-clean-history-rebuild
 corepack enable
 pnpm ssi:bootstrap
 # EDIT .env and set PLATFORM_ADMIN_EMAIL to your development account
+pnpm ssi:doctor
+# When services are running, add --live to validate actual connections:
+# pnpm ssi:doctor --live
 docker compose -f docker-compose.dev.yml config --quiet
 docker compose -f docker-compose.dev.yml up --build -d
 docker compose -f docker-compose.dev.yml ps
@@ -51,3 +54,7 @@ If the health endpoint is unavailable, inspect migration/seed, PostgreSQL creden
 - Copilot is send-disabled, not a durable draft/approval queue; outgoing AI messages do not yet have an atomic outbox claim.
 - Personality Studio and Knowledge Hub/RAG remain incomplete SSI product features.
 - No live provider OAuth/webhook or real social-account integration is implied by the local health check.
+
+### Configuration diagnostic
+
+Run `pnpm ssi:doctor` to check Node and the local `.env` configuration without showing secret values. Warnings indicate missing optional operator setup; errors fail the command. `pnpm ssi:doctor --live` additionally checks TCP connectivity to the configured PostgreSQL/Redis/object storage and calls the builder `/api/health` endpoint. This is a local operator aid, **not** production security certification; `--strict` makes warnings fatal for an operator-controlled readiness gate.
