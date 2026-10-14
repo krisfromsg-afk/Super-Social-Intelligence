@@ -1322,7 +1322,11 @@ class ConversationService extends BaseService {
               AND NOT (${conversationModel.additionalAttributes} ? 'ssiAiControl') THEN 0
             WHEN jsonb_typeof(${conversationModel.additionalAttributes}->'ssiAiControl') = 'object'
               AND jsonb_typeof(${conversationModel.additionalAttributes}->'ssiAiControl'->'version') = 'number'
-              AND (${conversationModel.additionalAttributes}->'ssiAiControl'->>'version') ~ '^[1-9][0-9]{0,9}
+              AND (${conversationModel.additionalAttributes}->'ssiAiControl'->>'version') ~ '^[1-9][0-9]{0,9}$'
+              AND (${conversationModel.additionalAttributes}->'ssiAiControl'->>'mode') IN ('human_only', 'copilot', 'autopilot')
+            THEN (${conversationModel.additionalAttributes}->'ssiAiControl'->>'version')::bigint
+            ELSE -1
+          END) = ${expectedVersion}`,
         ),
       )
       .returning({ id: conversationModel.id })
