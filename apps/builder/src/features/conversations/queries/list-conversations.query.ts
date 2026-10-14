@@ -24,6 +24,7 @@ import type {
   FindConversationResponse,
   ListConversationsResponse,
 } from "../schema/resource"
+import { stripSsiCopilotDraftFromMetadata } from "../lib/strip-ssi-copilot-draft"
 import { buildConversationWhere } from "./build-conversation-where"
 import { resolveLastMessageSinceTime } from "./last-message-window"
 
@@ -186,6 +187,7 @@ export const listConversations = async (
         const lastMessage = lastMessagesByConversationId.get(c.id)
         return {
           ...c,
+          additionalAttributes: stripSsiCopilotDraftFromMetadata(c.additionalAttributes),
           contact: await resolveConversationContact(
             c.contact ?? null,
             c.contactInboxes,
@@ -238,6 +240,7 @@ export const findConversation = async (
   return {
     data: {
       ...conversation,
+      additionalAttributes: stripSsiCopilotDraftFromMetadata(conversation.additionalAttributes),
       contact: await resolveConversationContact(
         conversation.contact,
         conversation.contactInboxes,

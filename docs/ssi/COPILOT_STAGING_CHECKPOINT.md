@@ -18,3 +18,7 @@ The metadata model is a temporary single-record stage and overwrites previous ve
 - Both concurrent edit attempts against the same draft version cannot win.
 - Explicit malformed draft JSON is never treated as an empty draft; it fails closed.
 - Approve/reject is a terminal staging decision; it cannot call existing `createMessageAction` or a provider.
+
+## API confidentiality boundary
+
+The `ssiCopilotDraft` staging field is private: public/workspace-token and private Inbox conversation list/single endpoints explicitly redact it before returning a conversation. The shared Zod `conversationResource` additionally strips it at the response-validation boundary. Dedicated draft actions require full `contacts` permission or super-admin rights, excluding support impersonation and assigned-only agents until assigned-scope authorization exists. Dedicated regression tests cover the redaction. This limits the known conversation serialization paths; broader API/telemetry and database access still require release security review.

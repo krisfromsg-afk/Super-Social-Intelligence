@@ -13,8 +13,13 @@ import { contactInboxResource } from "@/features/contact-inboxes/schema/resource
 import { contactResource } from "@/features/contacts/schema/resource"
 import { messageResourceWithRelations } from "@/features/messages/schema/resource"
 import { userResource } from "@/features/users/schema/resource"
+import { stripSsiCopilotDraftFromMetadata } from "../lib/strip-ssi-copilot-draft"
 
 export const conversationResource = createSelectSchema(conversationModel, {
+  // Defense in depth: public and private outputs must NEVER include staged
+  // draft text, even if a new handler forgets the explicit query projection.
+  additionalAttributes: z.record(z.string(), z.unknown()).nullable()
+    .transform(stripSsiCopilotDraftFromMetadata),
   id: z.string(),
   contactId: z.string(),
   workspaceId: z.string(),
