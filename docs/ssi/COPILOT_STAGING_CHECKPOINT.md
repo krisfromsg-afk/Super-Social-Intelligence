@@ -26,3 +26,7 @@ The `ssiCopilotDraft` staging field is private: public/workspace-token and priva
 ### Re-entering Copilot after a Human Only transition
 
 If a conversation switches out of Copilot and returns, the original staged draft is still **readable only to authorized editors** but marked stale. Review/approval is disabled in the UI, and the database will reject a stale-mode approval. An operator can explicitly save a fresh revision with the new mode version; this fixes a CAS dead-end where hiding the old draft caused an endless version-0 conflict. The old revision is overwritten by this interim single-slot storage, which is why append-only audit history remains a release blocker.
+
+### Explicit no-send safeguard
+
+The Ownership Safety CI includes a source-level no-send tripwire for staging actions: a future change that wires `messageService.createOutgoing`, BullMQ queues or direct channel sends into `approve` must fail and receive a deliberate separate outbox review. The unit test for the business staging service also asserts `approved_not_sent` and optimistic-CAS predicates. This tripwire is a review aid, not proof that every possible provider dispatch path is safe.

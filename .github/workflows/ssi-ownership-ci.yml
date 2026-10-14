@@ -57,6 +57,8 @@ jobs:
           pnpm --filter builder exec vitest run src/features/conversations/actions/__tests__/ssi-copilot-draft-permissions.test.ts
       - name: SSI server-mode activation authorization
         run: pnpm --filter builder exec vitest run src/features/conversations/actions/__tests__/ssi-ai-mode-permissions.test.ts
+      - name: Prevent Copilot staged approvals from becoming outbound sends
+        run: node --test scripts/ssi/__tests__/copilot-staging-no-send.test.mjs
       - name: Verify private Copilot drafts never appear in conversation API output
         run: pnpm --filter builder exec vitest run src/features/conversations/lib/__tests__/strip-ssi-copilot-draft.test.ts
       - name: SSI client mode and browser-pane isolation
