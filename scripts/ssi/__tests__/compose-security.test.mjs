@@ -13,12 +13,16 @@ test("Compose requires secrets with no fixed fallback credentials", () => {
   }
 })
 
-test("all local port mappings bind to loopback explicitly", () => {
+test("all published ports in base and developer Compose bind to loopback", () => {
   for (const source of [base, dev]) {
-    for (const line of source.split("\n")) {
-      if (!/^\s+-\s+["']?(?:\$\{|\d+)/.test(line)) continue
-      if (!/\d+:[0-9]+/.test(line)) continue
-      assert.match(line, /127\.0\.0\.1:/, "Non-loopback port mapping: " + line)
+    const portBlocks = [...source.matchAll(/^\s+ports:\s*\n((?:\s+-[^\n]+\n)+)/gm)]
+    assert.ok(portBlocks.length > 0, "Expected at least one published port block")
+    for (const match of portBlocks) {
+      const entries = match[1].split("\n").filter((line) => line.trim().startsWith("- "))
+      assert.ok(entries.length > 0)
+      for (const line of entries) {
+        assert.match(line, /127\.0\.0\.1:/, "Non-loopback port mapping: " + line)
+      }
     }
   }
 })
