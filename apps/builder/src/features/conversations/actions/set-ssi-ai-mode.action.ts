@@ -8,6 +8,7 @@ import {
   workspaceIdrequestParams,
 } from "@/features/common/schema"
 import { workspaceActionClient } from "@/lib/safe-action"
+import { assertSsiAiModePermission } from "./ssi-ai-mode-permissions"
 
 const request = z.object({
   conversationId: z.string().regex(/^\d+$/),
@@ -27,11 +28,14 @@ export const setSsiAiModeAction = workspaceActionClient
   }: {
     bindArgsParsedInputs: WorkspaceIdRequestParams
     parsedInput: SsiAiModeRequest
-    ctx: { user: UserModel }
-  }) => await conversationService.setSsiAiMode({
+    ctx: { user: UserModel; workspaceMemberPermissions: Record<string, unknown>; isSupportSession: boolean }
+  }) => {
+    assertSsiAiModePermission(ctx.workspaceMemberPermissions, parsedInput.mode, ctx.isSupportSession)
+    return conversationService.setSsiAiMode({
     workspaceId,
     id: parsedInput.conversationId,
     mode: parsedInput.mode,
     expectedVersion: parsedInput.expectedVersion,
     userId: ctx.user.id,
-  }))
+    })
+  })

@@ -47,5 +47,7 @@ jobs:
         run: pnpm --filter @chatbotx.io/business exec vitest run src/conversation/__tests__/ssi-ai-control.test.ts src/conversation/__tests__/conversation.service.test.ts
       - name: SSI worker last-mile guard and tenant authorization
         run: pnpm --filter worker exec vitest run src/chat/utils/ssi-outbound-policy.test.ts
+      - name: SSI server-mode activation authorization
+        run: pnpm --filter builder exec vitest run src/features/conversations/actions/__tests__/ssi-ai-mode-permissions.test.ts
       - name: SSI client mode and browser-pane isolation
         run: pnpm --filter builder exec vitest run src/features/ssi-inbox/__tests__/ui-ai-control.test.ts __tests__/message-thread-pane-scroll.test.tsx

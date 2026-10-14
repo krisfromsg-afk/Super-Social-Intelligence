@@ -34,3 +34,7 @@ See [Phase 2 acceptance plan](PHASE02_COMPLETION_PLAN.md), [Phase 3 plan](PHASE0
 In addition to re-reading the workspace-scoped conversation mode from the database, the message dispatcher now verifies that an outbound **bot** message's stored `workspaceId` and `conversationId` match the queued conversation before it reaches any provider. This guards against replaying a message under another conversation's ownership check when message storage has no foreign keys. The guard refuses missing/mismatched identifiers; manual human/API sends remain on their existing dispatch contract. Dedicated unit tests assert a valid binding and cross-tenant/cross-conversation denials.
 
 This narrows one payload-swap attack surface; it **does not** make the worker's persisted message and provider send atomic, nor replace the required unique send claims/outbox and live channel E2E.
+
+## 2026-10-14 permission enforcement for mode activation
+
+The SSI mode mutation server action now checks **workspace member permissions, not merely workspace membership**, before calling CAS persistence. Members with Inbox/contacts access (including assigned-only) can stop automated replies via Human Only. Changing to Copilot or Autopilot requires `flows` or `superAdmin` authorization. Platform-support impersonation cannot mutate any of these modes. The pure permission predicate is covered by negative tests and exercised by Ownership Safety CI. The separate existing legacy enable-bot actions and provider paths require their own authorization/audit before complete tenant certification.
