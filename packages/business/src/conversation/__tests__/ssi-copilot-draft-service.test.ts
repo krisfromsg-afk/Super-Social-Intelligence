@@ -57,7 +57,7 @@ describe("SSI Copilot staging service (NO dispatch)", () => {
     })
     const sqlShape = JSON.stringify(mocks.where.mock.calls[0])
     expect(sqlShape).toContain("workspaceId")
-    expect(sqlShape).toContain("conversationId")
+    expect(sqlShape).toContain('"456"')
     expect(sqlShape).toContain("copilot")
     expect(sqlShape).toContain("botEnabled")
     expect(sqlShape).toContain("ssiCopilotDraft")
