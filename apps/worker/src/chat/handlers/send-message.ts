@@ -60,7 +60,10 @@ import {
   shouldSuppressRetryableChannelError,
   willSendRetry,
 } from "../utils/retry"
-import { assertSsiAutomatedDispatchAllowed } from "../utils/ssi-outbound-policy"
+import {
+  assertSsiAutomatedDispatchAllowed,
+  assertSsiAutomatedMessageEnvelopeBound,
+} from "../utils/ssi-outbound-policy"
 import { reconcileChannelSendError } from "./channel-send-error-reconcilers"
 
 // Keep private comment replies aligned with sendMessageToChannel's isPrivateReply
@@ -210,6 +213,12 @@ export async function sendMessageToChannel(
   let routingContactInbox = contactInbox
   try {
     if (message.senderType === "bot") {
+      assertSsiAutomatedMessageEnvelopeBound({
+        workspaceId: conversation.workspaceId,
+        conversationId: conversation.id,
+        messageWorkspaceId: message.workspaceId,
+        messageConversationId: message.conversationId,
+      })
       await assertSsiAutomatedDispatchAllowed({
         workspaceId: conversation.workspaceId,
         conversationId: conversation.id,

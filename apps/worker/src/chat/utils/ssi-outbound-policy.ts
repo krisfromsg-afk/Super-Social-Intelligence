@@ -18,3 +18,27 @@ export async function assertSsiAutomatedDispatchAllowed(input: {
     )
   }
 }
+
+
+/** Prevent a stale or malformed queued bot payload from borrowing another
+ * conversation's authorization. Message hypertables intentionally have no
+ * conversation FK; the worker must check tenant and conversation coherence.
+ */
+export function assertSsiAutomatedMessageEnvelopeBound(input: {
+  workspaceId: string
+  conversationId: string
+  messageWorkspaceId: string
+  messageConversationId: string
+}): void {
+  if (
+    !input.workspaceId || !input.conversationId ||
+    input.messageWorkspaceId !== input.workspaceId ||
+    input.messageConversationId !== input.conversationId
+  ) {
+    throw new ChannelError(
+      "Automated message does not belong to the queued conversation",
+      ChannelErrorCategory.PERMISSION_DENIED,
+      { code: "ssi_automated_envelope_mismatch" },
+    )
+  }
+}

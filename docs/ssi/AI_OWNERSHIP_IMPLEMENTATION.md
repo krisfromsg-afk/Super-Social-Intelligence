@@ -28,3 +28,9 @@ Storing mode in an existing JSONB column avoids a new table migration for this s
 - Exact-tree source/license/third-party review and public-history cleanup (#4) before main merge.
 
 See [Phase 2 acceptance plan](PHASE02_COMPLETION_PLAN.md), [Phase 3 plan](PHASE03_PERSONALITY_STUDIO_PLAN.md), and [Phase 4 plan](PHASE04_KNOWLEDGE_HUB_PLAN.md).
+
+## 2026-10-14 outgoing bot envelope isolation increment
+
+In addition to re-reading the workspace-scoped conversation mode from the database, the message dispatcher now verifies that an outbound **bot** message's stored `workspaceId` and `conversationId` match the queued conversation before it reaches any provider. This guards against replaying a message under another conversation's ownership check when message storage has no foreign keys. The guard refuses missing/mismatched identifiers; manual human/API sends remain on their existing dispatch contract. Dedicated unit tests assert a valid binding and cross-tenant/cross-conversation denials.
+
+This narrows one payload-swap attack surface; it **does not** make the worker's persisted message and provider send atomic, nor replace the required unique send claims/outbox and live channel E2E.

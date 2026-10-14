@@ -10,7 +10,7 @@ vi.mock("@chatbotx.io/sdk", () => ({
   ChannelError: class ChannelError extends Error {},
   ChannelErrorCategory: { PERMISSION_DENIED: "permission_denied" },
 }))
-const { assertSsiAutomatedDispatchAllowed } = await import("./ssi-outbound-policy")
+const { assertSsiAutomatedDispatchAllowed, assertSsiAutomatedMessageEnvelopeBound } = await import("./ssi-outbound-policy")
 
 beforeEach(() => {
   findByUncached.mockReset()
@@ -46,5 +46,25 @@ describe("SSI last-mile send gate", () => {
     await expect(assertSsiAutomatedDispatchAllowed({
       workspaceId: "ws-a", conversationId: "conv-1",
     })).rejects.toThrow("DB unavailable")
+  })
+})
+
+
+describe("SSI outbound envelope tenant binding", () => {
+  const correct = {
+    workspaceId: "ws-a", conversationId: "conv-1",
+    messageWorkspaceId: "ws-a", messageConversationId: "conv-1",
+  }
+  it("accepts a message bound to the currently selected conversation", () => {
+    expect(() => assertSsiAutomatedMessageEnvelopeBound(correct)).not.toThrow()
+  })
+  it.each([
+    { messageWorkspaceId: "ws-b" },
+    { messageConversationId: "conv-2" },
+    { messageWorkspaceId: "" },
+    { messageConversationId: "" },
+  ])("rejects inconsistent automated message envelope %o", (change) => {
+    expect(() => assertSsiAutomatedMessageEnvelopeBound({ ...correct, ...change }))
+      .toThrow("Automated message does not belong")
   })
 })
