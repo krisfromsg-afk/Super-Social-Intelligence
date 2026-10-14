@@ -1328,6 +1328,26 @@ describe("SSI CAS AI ownership writes", () => {
     expect(mocks.broadcastToWorkspaceParty).not.toHaveBeenCalled()
   })
 
+  test("CAS SQL rejects malformed persisted SSI controls without unsafe cast", async () => {
+    mocks.updateReturning.mockResolvedValueOnce([])
+    await expect(conversationService.setSsiAiMode({
+      workspaceId: WORKSPACE_ID,
+      id: "conv-1",
+      expectedVersion: 0,
+      mode: "autopilot",
+      userId: "user-1",
+    })).rejects.toThrow("SSI mode changed")
+    const generatedSql = mocks.sql.mock.calls.map(([strings]) => (
+      Array.from(strings as TemplateStringsArray).join(" ")
+    )).join(" ")
+    expect(generatedSql).toContain("jsonb_typeof")
+    expect(generatedSql).toContain("NOT (")
+    expect(generatedSql).toContain("? 'ssiAiControl'")
+    expect(generatedSql).toContain("^[1-9][0-9]{0,9}$")
+    expect(generatedSql).toContain("THEN")
+    expect(generatedSql).toContain("ELSE -1")
+  })
+
   test("rejects unsafe numeric versions before querying", async () => {
     await expect(conversationService.setSsiAiMode({
       workspaceId: WORKSPACE_ID,

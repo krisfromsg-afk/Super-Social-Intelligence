@@ -1313,7 +1313,957 @@ class ConversationService extends BaseService {
         and(
           eq(conversationModel.id, id),
           eq(conversationModel.workspaceId, workspaceId),
-          sql`COALESCE((${conversationModel.additionalAttributes}->'ssiAiControl'->>'version')::int, 0) = ${expectedVersion}`,
+          // Explicit malformed controls must not be interpreted as legacy
+          // version 0. Guard all casts: a tampered value such as "oops" must
+          // safely fail the CAS, not throw a PostgreSQL conversion error.
+          sql`(CASE
+            WHEN ${conversationModel.additionalAttributes} IS NULL THEN 0
+            WHEN jsonb_typeof(${conversationModel.additionalAttributes}) = 'object'
+              AND NOT (${conversationModel.additionalAttributes} ? 'ssiAiControl') THEN 0
+            WHEN jsonb_typeof(${conversationModel.additionalAttributes}->'ssiAiControl') = 'object'
+              AND jsonb_typeof(${conversationModel.additionalAttributes}->'ssiAiControl'->'version') = 'number'
+              AND (${conversationModel.additionalAttributes}->'ssiAiControl'->>'version') ~ '^[1-9][0-9]{0,9}
+        ),
+      )
+      .returning({ id: conversationModel.id })
+
+    if (!updated) {
+      throw new Error("SSI mode changed or conversation is unavailable; refresh and retry")
+    }
+
+    if (!botEnabled) {
+      try {
+        await smartDelayService.cancelQuickReplyFollowUps({
+          tx: db,
+          workspaceId,
+          conversationIds: [id],
+        })
+      } catch (error) {
+        logger.warn({ err: error, workspaceId, conversationId: id },
+          "Unable to cancel queued quick replies after SSI AI takeover")
+      }
+    }
+
+    await this.invalidate({ workspaceId, ids: [id] })
+    publishToWorkspaceParty(workspaceId, {
+      eventType: RealtimeEventType.conversationUpdated,
+      data: {
+        conversationIds: [id],
+        changes: { botEnabled, botResumeAt: null },
+      },
+    })
+    return { mode, version, botEnabled }
+  }
+
+  async updateBotEnabled(props: {
+    workspaceId: string
+    ids: string[]
+    botEnabled: boolean
+    botResumeAt?: Date | null
+    tx?: DatabaseClient
+  }): Promise<void> {
+    const { workspaceId, ids, botEnabled, tx = db } = props
+    let botResumeAt: Date | null
+    if (props.botResumeAt !== undefined) {
+      botResumeAt = props.botResumeAt
+    } else if (botEnabled) {
+      botResumeAt = null
+    } else {
+      botResumeAt = new Date(Date.now() + BOT_DISABLE_DURATION_MS)
+    }
+    await tx
+      .update(conversationModel)
+      .set({
+        botEnabled,
+        botResumeAt,
+        ...(botEnabled
+          ? {}
+          : { additionalAttributes: sqlDropQuickReplyChallenge() }),
+      })
+      .where(
+        and(
+          eq(conversationModel.workspaceId, workspaceId),
+          inArray(conversationModel.id, ids),
+        ),
+      )
+    if (!botEnabled) {
+      // Best-effort: fire-time `ensureActive` already skips a follow-up on a
+      // paused conversation, so a failed cancel must never fail the pause (or
+      // skip `invalidate`). Inside a caller's tx it runs behind a SAVEPOINT so
+      // a failed statement cannot poison the outer transaction.
+      const cancel = (client: DatabaseClient) =>
+        smartDelayService.cancelQuickReplyFollowUps({
+          tx: client,
+          workspaceId,
+          conversationIds: ids,
+        })
+      try {
+        if (props.tx) {
+          await props.tx.transaction(cancel)
+        } else {
+          await cancel(tx)
+        }
+      } catch (error) {
+        logger.warn(
+          { err: error, workspaceId, conversationIds: ids },
+          "quick reply follow-up cancel on bot pause failed",
+        )
+      }
+    }
+    await this.invalidate({ workspaceId, ids })
+    // Persist first, then notify other open inboxes. Never publish inside an
+    // uncommitted transaction: consumers could otherwise see rolled-back state.
+    if (!props.tx && ids.length > 0) {
+      publishToWorkspaceParty(workspaceId, {
+        eventType: RealtimeEventType.conversationUpdated,
+        data: {
+          conversationIds: ids,
+          changes: { botEnabled, botResumeAt: botResumeAt?.toISOString() ?? null },
+        },
+      })
+    }
+  }
+
+  async updateFollowed(props: {
+    workspaceId: string
+    id: string
+    contactId: string
+    followed: boolean
+    userId?: string
+    triggerContext: TriggerContext
+    tx?: DatabaseClient
+  }): Promise<void> {
+    const {
+      workspaceId,
+      id,
+      contactId,
+      followed,
+      triggerContext,
+      tx = db,
+    } = props
+    await tx
+      .update(conversationModel)
+      .set({ followed })
+      .where(
+        and(
+          eq(conversationModel.id, id),
+          eq(conversationModel.workspaceId, workspaceId),
+        ),
+      )
+    await this.invalidate({ workspaceId, ids: [id] })
+
+    if (followed) {
+      await emitConversationFollowUp(workspaceId, contactId, id, props.userId)
+    }
+
+    emit("analytics:dashboard", {
+      eventType: followed ? "conversation:followed" : "conversation:unfollowed",
+      workspaceId,
+      conversationId: id,
+      occurredAt: new Date(),
+      metadata: { triggerContext },
+    })
+  }
+
+  async setFollowed(props: {
+    workspaceId: string
+    id: string
+    followed: boolean
+    userId?: string
+    triggerContext: TriggerContext
+    tx?: DatabaseClient
+  }): Promise<void> {
+    const { workspaceId, id, followed, userId, triggerContext, tx } = props
+    const conversation = await this.findByOrFail({
+      where: { id, workspaceId },
+      tx,
+    })
+
+    await this.updateFollowed({
+      workspaceId,
+      id,
+      contactId: conversation.contactId,
+      followed,
+      userId,
+      triggerContext,
+      tx,
+    })
+  }
+
+  async markUnread(props: {
+    workspaceId: string
+    id: string
+    tx?: DatabaseClient
+  }): Promise<{ agentLastReadAt: Date | null }> {
+    const { workspaceId, id, tx } = props
+    const conversation = await this.findByOrFail({
+      where: { id, workspaceId },
+      tx,
+    })
+
+    const messageRepository = await createMessageRepository()
+    const last2Messages = await messageRepository.findLastByConversation(
+      conversation.id,
+      {
+        messageTypes: ["incoming"],
+        limit: 2,
+        // Anchor on this conversation's own lastActivityAt, not a shared
+        // ContactInbox's lastMessageAt — a contact's ContactInbox is shared
+        // across their DM and every comment-thread conversation, so its
+        // lastMessageAt can reflect a different, more recently active
+        // conversation and push sinceTime past this conversation's real last
+        // message, causing the sharded scan to miss it.
+        sinceTime: getSafeSinceTime(
+          conversation.lastActivityAt ?? conversation.createdAt,
+          365 * 24 * 60 * 60 * 1000,
+        ),
+        workspaceId,
+      },
+    )
+    // Newest first: the cursor lands on the second-newest incoming message so
+    // only the latest one is unread. With a single message there is nothing
+    // to anchor on — anchoring on that message would make `lastActivityAt >
+    // agentLastReadAt` false and leave the row read — so it becomes never-read.
+    const agentLastReadAt =
+      last2Messages.length >= 2 ? (last2Messages[1]?.createdAt ?? null) : null
+
+    await this.updateReadStatus({ workspaceId, id, agentLastReadAt, tx })
+
+    return { agentLastReadAt }
+  }
+
+  /**
+   * Channel message id (e.g. a WhatsApp wamid) of the newest incoming message
+   * this conversation received on `contactInboxId`. Read receipts and typing
+   * indicators that must reference a real message use it. Looks back 30 days,
+   * matching WhatsApp's mark-as-read guidance.
+   */
+  async findLastIncomingMessageSourceId(props: {
+    conversation: Pick<
+      ConversationModel,
+      "id" | "workspaceId" | "lastActivityAt" | "createdAt"
+    >
+    contactInboxId: string
+  }): Promise<string | undefined> {
+    const { conversation, contactInboxId } = props
+    const messageRepository = await createMessageRepository()
+    const messages = await messageRepository.findLastByConversation(
+      conversation.id,
+      {
+        workspaceId: conversation.workspaceId,
+        messageTypes: ["incoming"],
+        limit: 10,
+        withAttachments: false,
+        // Anchor on this conversation's own lastActivityAt, not a shared
+        // ContactInbox's lastMessageAt (see the sharded-scan note elsewhere).
+        sinceTime: getSafeSinceTime(
+          conversation.lastActivityAt ?? conversation.createdAt,
+          30 * 24 * 60 * 60 * 1000,
+        ),
+      },
+    )
+
+    return (
+      messages.find(
+        (message) =>
+          message.contactInboxId === contactInboxId && message.sourceId,
+      )?.sourceId ?? undefined
+    )
+  }
+
+  async updateReadStatus(props: {
+    workspaceId: string
+    id: string
+    agentLastReadAt: Date | null
+    tx?: DatabaseClient
+  }): Promise<void> {
+    const { workspaceId, id, agentLastReadAt, tx = db } = props
+    await tx
+      .update(conversationModel)
+      .set({ agentLastReadAt })
+      .where(
+        and(
+          eq(conversationModel.id, id),
+          eq(conversationModel.workspaceId, workspaceId),
+        ),
+      )
+    await this.invalidate({ workspaceId, ids: [id] })
+    publishToWorkspaceParty(workspaceId, {
+      eventType: RealtimeEventType.conversationUpdated,
+      data: {
+        conversationIds: [id],
+        changes: { agentLastReadAt: agentLastReadAt?.toISOString() ?? null },
+      },
+    })
+  }
+
+  /**
+   * Advances agent read state only, so retries and delayed outbound events
+   * cannot overwrite a newer read. The inbox preference is checked inside the
+   * same statement to avoid racing a separate gate read; successful advances
+   * broadcast the same best-effort realtime update as manual reads.
+   */
+  async markReadByOutbound(props: {
+    workspaceId: string
+    conversationId: string
+    inboxId: string
+    readAt: Date
+    silent?: boolean
+  }): Promise<boolean> {
+    const { conversationId, inboxId, readAt, silent, workspaceId } = props
+    const updated = await db
+      .update(conversationModel)
+      .set({ agentLastReadAt: readAt })
+      .where(
+        and(
+          eq(conversationModel.id, conversationId),
+          eq(conversationModel.workspaceId, workspaceId),
+          or(
+            isNull(conversationModel.agentLastReadAt),
+            lt(conversationModel.agentLastReadAt, readAt),
+          ),
+          exists(
+            db
+              .select({ value: sql<number>`1` })
+              .from(inboxModel)
+              .where(
+                and(
+                  eq(inboxModel.id, inboxId),
+                  eq(inboxModel.workspaceId, workspaceId),
+                  eq(inboxModel.markReadOnOutbound, true),
+                ),
+              ),
+          ),
+        ),
+      )
+      .returning({ id: conversationModel.id })
+
+    if (updated.length === 0) {
+      return false
+    }
+
+    await this.invalidate({ workspaceId, ids: [conversationId] })
+    if (!silent) {
+      publishToWorkspaceParty(workspaceId, {
+        eventType: RealtimeEventType.conversationUpdated,
+        data: {
+          conversationIds: [conversationId],
+          changes: { agentLastReadAt: readAt.toISOString() },
+        },
+      })
+    }
+
+    return true
+  }
+
+  /**
+   * Contact-side companion to updateReadStatus. Shared by read-receipt worker
+   * paths so conversation and contact-inbox tracking stay in sync.
+   */
+  async markReadByContact(props: {
+    workspaceId: string
+    conversationId: string
+    contactInboxId: string
+    contactId: string
+    seenAt: Date
+  }): Promise<void> {
+    const { workspaceId, conversationId, contactInboxId, contactId, seenAt } =
+      props
+
+    const trackingInvalidation = await db.transaction(async (tx) => {
+      await tx
+        .update(conversationModel)
+        .set({ contactLastReadAt: seenAt })
+        .where(
+          and(
+            eq(conversationModel.id, conversationId),
+            eq(conversationModel.workspaceId, workspaceId),
+          ),
+        )
+
+      return await contactInboxService.updateTracking({
+        tx,
+        contactInboxId,
+        contactId,
+        workspaceId,
+        data: { contactLastReadAt: seenAt },
+      })
+    })
+
+    if (trackingInvalidation) {
+      await contactInboxService.invalidateTracking(trackingInvalidation)
+    }
+
+    await this.invalidate({ workspaceId, ids: [conversationId] })
+  }
+
+  async updateAIContextLastMessageId(props: {
+    workspaceId: string
+    conversationId: string
+    messageId: string | null
+    tx?: DatabaseClient
+  }): Promise<void> {
+    const { workspaceId, conversationId, messageId, tx = db } = props
+    await tx
+      .update(conversationModel)
+      .set({ aiContextLastMessageId: messageId })
+      .where(
+        and(
+          eq(conversationModel.id, conversationId),
+          eq(conversationModel.workspaceId, workspaceId),
+        ),
+      )
+    await this.invalidate({ workspaceId, ids: [conversationId] })
+  }
+
+  /**
+   * Batched activity + AI-context-marker advance for coexist sync writes.
+   * ONE VALUES-join UPDATE for the whole bulk (mirrors the pre-existing
+   * `lastActivityAt`-only UPDATE in `applyCoexistActivityUpdates`), extended
+   * to also advance `aiContextLastMessageId`.
+   *
+   * Both columns are advance-only and NULL-guarded per row: a null
+   * `newestMessageAt` leaves `lastActivityAt` untouched, and a null
+   * `aiMarkerMessageId` leaves `aiContextLastMessageId` untouched. The marker
+   * only ever moves FORWARD to a message id actually inserted by a coexist
+   * sync for that conversation (either direction) — never backwards, and
+   * never to an arbitrary id — so a stale/replayed batch can never regress
+   * it. Callers dedup rows by `conversationId` before calling this.
+   */
+  async bulkAdvanceActivityAndAiContextMarker(props: {
+    workspaceId: string
+    rows: Array<{
+      conversationId: string
+      newestMessageAt: Date | null
+      /** Id of the newest sync-inserted message (either direction); null = leave marker untouched. */
+      aiMarkerMessageId: string | null
+    }>
+    tx?: DatabaseClient
+  }): Promise<void> {
+    const { workspaceId, rows, tx = db } = props
+    if (rows.length === 0) {
+      return
+    }
+
+    const valueRows = rows.map(
+      (row) => sql`(
+        ${row.conversationId}::int8,
+        ${row.newestMessageAt}::timestamptz,
+        ${row.aiMarkerMessageId}::int8
+      )`,
+    )
+
+    await tx.execute(sql`
+      UPDATE "Conversation" AS t
+      SET "lastActivityAt" = CASE
+            WHEN u.ts IS NOT NULL AND (t."lastActivityAt" IS NULL OR t."lastActivityAt" < u.ts) THEN u.ts
+            ELSE t."lastActivityAt" END,
+          "aiContextLastMessageId" = CASE
+            WHEN u.marker IS NOT NULL AND (t."aiContextLastMessageId" IS NULL OR t."aiContextLastMessageId" < u.marker) THEN u.marker
+            ELSE t."aiContextLastMessageId" END
+      FROM (VALUES ${sql.join(valueRows, sql`, `)}) AS u(id, ts, marker)
+      WHERE t."id" = u.id AND t."workspaceId" = ${workspaceId}::int8
+    `)
+
+    await this.invalidate({
+      workspaceId,
+      ids: rows.map((row) => row.conversationId),
+    })
+  }
+
+  async updateFlowStepState(props: {
+    workspaceId: string
+    conversationId: string
+    currentStep?: string | null
+    lastActivityAt?: Date
+    lastStep?: string | null
+    contactRepliedAt?: Date
+    tx?: DatabaseClient
+  }): Promise<void> {
+    const { workspaceId, conversationId, tx = db } = props
+    const data: PgUpdateSetSource<typeof conversationModel> = {}
+    if ("currentStep" in props) {
+      data.currentStep = props.currentStep
+    }
+    if (props.lastActivityAt !== undefined) {
+      // Postgres GREATEST ignores NULL operands, so a NULL column advances to the new value.
+      data.lastActivityAt = sql`GREATEST(${conversationModel.lastActivityAt}, ${props.lastActivityAt})`
+    }
+    if ("contactRepliedAt" in props && props.contactRepliedAt) {
+      // Advance-only: a delayed/retried older webhook processed after a
+      // newer one must never move this column backwards (which would hide
+      // an already-seen unread message). Postgres GREATEST ignores NULLs;
+      // the COALESCE is kept only for readability.
+      data.contactRepliedAt = sql`GREATEST(COALESCE(${conversationModel.contactRepliedAt}, ${props.contactRepliedAt}), ${props.contactRepliedAt})`
+    }
+    if ("lastStep" in props) {
+      data.lastStep = props.lastStep
+    }
+
+    if (Object.keys(data).length === 0) {
+      return
+    }
+
+    await tx
+      .update(conversationModel)
+      .set(data)
+      .where(
+        and(
+          eq(conversationModel.id, conversationId),
+          eq(conversationModel.workspaceId, workspaceId),
+        ),
+      )
+    if (!props.tx) {
+      await this.invalidate({ workspaceId, ids: [conversationId] })
+    }
+  }
+
+  // ─── Bot state helpers ───────────────────────────────────────────────────
+
+  async disableBotState(props: {
+    workspaceId: string
+    conversations: { id: string; contactId: string }[]
+    userId?: string
+    triggerContext: TriggerContext
+    botResumeAt?: Date | null
+    tx?: DatabaseClient
+  }): Promise<void> {
+    await this.updateBotEnabled({
+      workspaceId: props.workspaceId,
+      ids: props.conversations.map((c) => c.id),
+      botEnabled: false,
+      botResumeAt: props.botResumeAt,
+      tx: props.tx,
+    })
+
+    for (const conv of props.conversations) {
+      await emitConversationTransferredToHuman(
+        props.workspaceId,
+        conv.contactId,
+        conv.id,
+        props.userId,
+      )
+
+      emit("analytics:dashboard", {
+        eventType: "conversation:transferred_to_human",
+        workspaceId: props.workspaceId,
+        conversationId: conv.id,
+        occurredAt: new Date(),
+        metadata: { triggerContext: props.triggerContext },
+      })
+    }
+  }
+
+  async enableBotState(props: {
+    workspaceId: string
+    conversations: { id: string; contactId: string }[]
+    userId?: string
+    triggerContext: TriggerContext
+    tx?: DatabaseClient
+  }): Promise<void> {
+    await this.updateBotEnabled({
+      workspaceId: props.workspaceId,
+      ids: props.conversations.map((c) => c.id),
+      botEnabled: true,
+      botResumeAt: null,
+      tx: props.tx,
+    })
+
+    for (const conv of props.conversations) {
+      await emitConversationTransferredToBot(
+        props.workspaceId,
+        conv.contactId,
+        conv.id,
+        props.userId,
+      )
+
+      emit("analytics:dashboard", {
+        eventType: "conversation:transferred_to_bot",
+        workspaceId: props.workspaceId,
+        conversationId: conv.id,
+        occurredAt: new Date(),
+        metadata: { triggerContext: props.triggerContext },
+      })
+    }
+  }
+
+  async setBotEnabledByIds(props: {
+    workspaceId: string
+    ids: string[]
+    botEnabled: boolean
+    userId?: string
+    triggerContext: TriggerContext
+    /** null disables auto-resume, undefined preserves the existing 24h pause. */
+    botResumeAt?: Date | null
+    tx?: DatabaseClient
+  }): Promise<void> {
+    const { workspaceId, ids, botEnabled, userId, triggerContext, tx } = props
+    const conversations = await this.findManyByIds({ workspaceId, ids, tx })
+
+    if (botEnabled) {
+      await this.enableBotState({
+        workspaceId,
+        conversations,
+        userId,
+        triggerContext,
+        tx,
+      })
+    } else {
+      await this.disableBotState({
+        workspaceId,
+        conversations,
+        userId,
+        triggerContext,
+        botResumeAt: props.botResumeAt,
+        tx,
+      })
+    }
+  }
+
+  async ensureActive(
+    conversation: Pick<
+      ConversationModel,
+      "id" | "workspaceId" | "contactId" | "botEnabled" | "botResumeAt"
+    >,
+    tx?: DatabaseClient,
+  ): Promise<boolean> {
+    if (conversation.botEnabled) {
+      return true
+    }
+
+    if (!conversation.botResumeAt || conversation.botResumeAt > new Date()) {
+      return false
+    }
+
+    // The worker may have read an expired pause just BEFORE an operator
+    // switched to permanent Human Only. Compare-and-swap on the exact pause
+    // deadline so this stale worker cannot re-enable automation.
+    const client = tx ?? db
+    const [claimed] = await client
+      .update(conversationModel)
+      .set({ botEnabled: true, botResumeAt: null })
+      .where(
+        and(
+          eq(conversationModel.id, conversation.id),
+          eq(conversationModel.workspaceId, conversation.workspaceId),
+          eq(conversationModel.botEnabled, false),
+          eq(conversationModel.botResumeAt, conversation.botResumeAt),
+          lt(conversationModel.botResumeAt, new Date()),
+        ),
+      )
+      .returning({ id: conversationModel.id })
+
+    if (!claimed) {
+      // False if Human Only won; true if another explicit operation already
+      // re-enabled the bot. Never trust the caller's stale snapshot.
+      const current = await client.query.conversationModel.findFirst({
+        where: { id: conversation.id, workspaceId: conversation.workspaceId },
+        columns: { botEnabled: true },
+      })
+      return current?.botEnabled === true
+    }
+
+    await this.invalidate({
+      workspaceId: conversation.workspaceId,
+      ids: [conversation.id],
+    })
+    await emitConversationTransferredToBot(
+      conversation.workspaceId,
+      conversation.contactId,
+      conversation.id,
+    )
+    emit("analytics:dashboard", {
+      eventType: "conversation:transferred_to_bot",
+      workspaceId: conversation.workspaceId,
+      conversationId: conversation.id,
+      occurredAt: new Date(),
+      metadata: {
+        triggerContext: {
+          triggerSource: "system",
+          triggerHandler: "ensureActive",
+          triggerType: "bot_auto_resume",
+        },
+      },
+    })
+    if (!tx) {
+      publishToWorkspaceParty(conversation.workspaceId, {
+        eventType: RealtimeEventType.conversationUpdated,
+        data: {
+          conversationIds: [conversation.id],
+          changes: { botEnabled: true, botResumeAt: null },
+        },
+      })
+    }
+
+    return true
+  }
+
+  // ─── Cache ───────────────────────────────────────────────────────────────
+
+  async invalidate(props: {
+    workspaceId: string
+    ids?: string[]
+  }): Promise<void> {
+    const tags = [
+      this.cachePrefix,
+      `${this.cachePrefix}:${props.workspaceId}`,
+      ...(props.ids?.map((id) => `${this.cachePrefix}:${id}`) ?? []),
+    ]
+    await this.invalidateCacheTags(tags)
+  }
+
+  /**
+   * Conversation + contact, for the hot send-flow-step path (do NOT use
+   * `findWithFullRelations` here — it fetches far more). Unscoped by `id`
+   * only — safe today because its sole caller (`send-flow-step.ts`) is the
+   * entry point that resolves the workspace *from* this conversation lookup,
+   * so no `workspaceId` exists yet to filter by.
+   */
+  async findByIdWithContactUnscoped(props: {
+    id: string
+    tx?: DatabaseClient
+  }): Promise<
+    (ConversationModel & { contact: ContactModel | null }) | undefined
+  > {
+    const { id, tx = db } = props
+    return await tx.query.conversationModel.findFirst({
+      where: { id },
+      with: { contact: true },
+    })
+  }
+
+  /**
+   * Inbound-message activity write — owns the transaction: contact-inbox
+   * tracking update, an optional contact location write, and the
+   * conversation's `lastActivityAt` advance (via `updateFlowStepState`
+   * instead of a raw `tx.update`). Moved from
+   * `received-message.ts`'s `persistNewMessageSideEffects`.
+   *
+   * NOTE: `updateFlowStepState`'s WHERE includes `workspaceId` — the raw
+   * worker version did not scope by `workspaceId` on this UPDATE. Safe here
+   * because the conversation is already loaded workspace-scoped upstream,
+   * but this is a deliberate behavior change — call it out in the PR body.
+   */
+  async recordInboundActivity(props: {
+    workspaceId: string
+    conversationId: string
+    contactInboxId: string
+    contactId: string
+    tracking: ContactInboxTrackingData
+    contactLocation?: ContactModel["location"] | null
+    at: Date
+    /** Set only for contact-authored messages; drives the "No admin reply" filter. */
+    contactRepliedAt?: Date
+  }): Promise<ContactInboxTrackingInvalidation | null> {
+    const {
+      workspaceId,
+      conversationId,
+      contactInboxId,
+      contactId,
+      tracking,
+      contactLocation,
+      at,
+      contactRepliedAt,
+    } = props
+
+    return await db.transaction(async (tx) => {
+      const invalidation = await contactInboxService.updateTracking({
+        tx,
+        contactInboxId,
+        contactId,
+        workspaceId,
+        data: tracking,
+      })
+
+      if (contactLocation) {
+        await contactService.update(
+          { workspaceId, id: contactId },
+          { location: contactLocation },
+          tx,
+        )
+      }
+
+      await this.updateFlowStepState({
+        tx,
+        workspaceId,
+        conversationId,
+        lastActivityAt: at,
+        ...(contactRepliedAt ? { contactRepliedAt } : {}),
+      })
+
+      return invalidation
+    })
+  }
+
+  /**
+   * Outbound flow-step send activity — owns the transaction:
+   * `recordOutboundMessageCreated` + `updateFlowStepState` (advances
+   * `currentStep`/`lastStep`/`lastActivityAt`). Moved from
+   * `chat/handlers/send-flow-step.ts`'s `sendFlowStep`.
+   */
+  async recordOutboundFlowStep(props: {
+    workspaceId: string
+    conversationId: string
+    contactInboxId: string
+    contactId: string
+    at: Date
+    bumpActivity?: boolean
+    lastStep?: string | null
+    currentStep?: string | null
+  }): Promise<ContactInboxTrackingInvalidation | null> {
+    const {
+      workspaceId,
+      conversationId,
+      contactInboxId,
+      contactId,
+      at,
+      bumpActivity = true,
+      lastStep,
+      currentStep,
+    } = props
+
+    return await db.transaction(async (tx) => {
+      const invalidation =
+        await contactInboxService.recordOutboundMessageCreated({
+          tx,
+          contactInboxId,
+          contactId,
+          workspaceId,
+          at,
+        })
+
+      await this.updateFlowStepState({
+        tx,
+        workspaceId,
+        conversationId,
+        ...(bumpActivity ? { lastActivityAt: at } : {}),
+        lastStep,
+        currentStep,
+      })
+
+      return invalidation
+    })
+  }
+
+  /**
+   * Outbound message activity (chat / template sends) — owns the
+   * transaction: `recordOutboundMessageCreated` + `updateFlowStepState`
+   * (`lastActivityAt` only). Shared by `sendChatMessage`,
+   * `send-messenger-template.ts`, and `send-whatsapp-template.ts` — write
+   * once, call from all three.
+   *
+   * NOTE: `updateFlowStepState`'s WHERE includes `workspaceId` — the raw
+   * worker version's `tx.update(conversationModel)` scoped only by `id`.
+   * Safe here (conversation is already workspace-scoped upstream) but a
+   * deliberate behavior change — call it out in the PR body.
+   */
+  async recordOutboundMessageActivity(props: {
+    workspaceId: string
+    conversationId: string
+    contactInboxId: string
+    contactId: string
+    at: Date
+    bumpActivity?: boolean
+  }): Promise<ContactInboxTrackingInvalidation | null> {
+    const {
+      workspaceId,
+      conversationId,
+      contactInboxId,
+      contactId,
+      at,
+      bumpActivity = true,
+    } = props
+
+    return await db.transaction(async (tx) => {
+      const invalidation =
+        await contactInboxService.recordOutboundMessageCreated({
+          tx,
+          contactInboxId,
+          contactId,
+          workspaceId,
+          at,
+        })
+
+      await this.updateFlowStepState({
+        tx,
+        workspaceId,
+        conversationId,
+        ...(bumpActivity ? { lastActivityAt: at } : {}),
+      })
+
+      return invalidation
+    })
+  }
+
+  /**
+   * Per-assignee open-conversation counts for round-robin allocation
+   * (`step-handlers.ts`'s `stepAutoAssignConversation`). Accepts the raw
+   * `filterConditions` `SQL[]` built by the caller (e.g. the "last N hours"
+   * rule) rather than a semantic filter object — a documented fallback to
+   * avoid a larger move of `filterConversationConditions` construction.
+   */
+  async countByAssignee(props: {
+    filterConditions: SQL[]
+    userIds: string[]
+    inboxTeamIds: string[]
+    tx?: DatabaseClient
+  }): Promise<
+    Array<{
+      assignedUserId: string | null
+      assignedInboxTeamId: string | null
+      conversationsCount: number
+    }>
+  > {
+    const { filterConditions, userIds, inboxTeamIds, tx = db } = props
+    return await tx
+      .select({
+        assignedUserId: conversationModel.assignedUserId,
+        assignedInboxTeamId: conversationModel.assignedInboxTeamId,
+        conversationsCount: sql<number>`cast(count(${conversationModel.id}) as int)`,
+      })
+      .from(conversationModel)
+      .groupBy(
+        conversationModel.assignedUserId,
+        conversationModel.assignedInboxTeamId,
+      )
+      .where(
+        and(
+          ...filterConditions,
+          and(
+            or(
+              inArray(conversationModel.assignedUserId, userIds),
+              inArray(conversationModel.assignedInboxTeamId, inboxTeamIds),
+            ),
+          ),
+        ),
+      )
+  }
+
+  /**
+   * `trigger/services/action-executor.ts` execute: the trigger action's own
+   * conversation lookup, ordered by `createdAt` desc and workspace-scoped.
+   * Distinct from `findLatestByContact` (orders by `lastActivityAt`, not
+   * workspace-scoped) — do not reuse that one here.
+   */
+  async findLatestCreatedByContact(props: {
+    workspaceId: string
+    contactId: string
+    tx?: DatabaseClient
+  }): Promise<ConversationModel | undefined> {
+    const { tx = db, workspaceId, contactId } = props
+    return await tx.query.conversationModel.findFirst({
+      where: { contactId, workspaceId },
+      orderBy: { createdAt: "desc" },
+    })
+  }
+}
+
+export const conversationService = new ConversationService()
+
+              AND (${conversationModel.additionalAttributes}->'ssiAiControl'->>'mode') IN ('human_only', 'copilot', 'autopilot')
+            THEN (${conversationModel.additionalAttributes}->'ssiAiControl'->>'version')::bigint
+            ELSE -1
+          END) = ${expectedVersion}`,
         ),
       )
       .returning({ id: conversationModel.id })

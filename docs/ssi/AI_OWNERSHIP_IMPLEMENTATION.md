@@ -38,3 +38,7 @@ This narrows one payload-swap attack surface; it **does not** make the worker's 
 ## 2026-10-14 permission enforcement for mode activation
 
 The SSI mode mutation server action now checks **workspace member permissions, not merely workspace membership**, before calling CAS persistence. Members with Inbox/contacts access (including assigned-only) can stop automated replies via Human Only. Changing to Copilot or Autopilot requires `flows` or `superAdmin` authorization. Platform-support impersonation cannot mutate any of these modes. The pure permission predicate is covered by negative tests and exercised by Ownership Safety CI. The separate existing legacy enable-bot actions and provider paths require their own authorization/audit before complete tenant certification.
+
+## 2026-10-14 malformed-control CAS hardening
+
+`setSsiAiMode` now protects PostgreSQL's version cast with a typed `CASE` predicate. Only absent SSI control (legacy version zero) or a recognized object containing a positive integer version and recognized mode may win the CAS. An explicit invalid `ssiAiControl` value, an array/scalar `additionalAttributes`, or a nonnumeric/oversized version fails the update instead of being misclassified as legacy or triggering a raw PostgreSQL cast exception. In all cases the API fails closed; it never silently enables Autopilot. Existing workspace-scoped match and version increments are preserved.
