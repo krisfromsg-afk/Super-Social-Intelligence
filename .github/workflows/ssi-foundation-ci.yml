@@ -96,6 +96,8 @@ jobs:
             echo "ERROR: local bootstrap overwrote an existing environment" >&2
             exit 1
           fi
+      - name: Verify Compose requires unique secrets and loopback exposure
+        run: node --test scripts/ssi/__tests__/compose-security.test.mjs
       - name: Guard against shared-password demo seeding
         run: node --test scripts/ssi/__tests__/seed-safety.test.mjs
       - name: Test local config diagnostic

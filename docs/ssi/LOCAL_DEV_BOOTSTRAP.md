@@ -66,3 +66,7 @@ The previous upstream seed created a predictable verified demo account with a kn
 ### Privacy and Terms configuration before public launch
 
 The signup screen no longer silently falls back to the upstream vendor's Terms/Privacy links. If this SSI installation does not have **both** configured HTTPS legal URLs, it does not display a misleading acceptance statement. Configure actual operator-approved policy and terms in tenant/platform settings before exposing registration beyond a disposable development environment. Missing policy links remain a production release blocker, not a substitute for real documents.
+
+### Docker port and password safety
+
+The development Compose manifests publish external ports **only on `127.0.0.1`**, not on every interface. PostgreSQL and object storage refuse missing required secrets; the JS executor requires a non-empty token. Generate a private `.env` with `pnpm ssi:bootstrap` before invoking Compose. These boundaries are verified in CI but are not a production TLS, firewall, reverse-proxy, or secret-manager configuration. If a remote team member needs access, use a deliberate authenticated HTTPS reverse proxy or SSH tunnel; do not remove the loopback binding casually.

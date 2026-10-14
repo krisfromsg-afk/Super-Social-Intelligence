@@ -5,8 +5,8 @@ x-network: &network
     - chatbotx-network
 
 x-rustfs-environment: &rustfs-environment
-  RUSTFS_ACCESS_KEY: ${RUSTFS_ACCESS_KEY:-chatbotx}
-  RUSTFS_SECRET_KEY: ${RUSTFS_SECRET_KEY:-secretkey}
+  RUSTFS_ACCESS_KEY: ${RUSTFS_ACCESS_KEY:?Run pnpm ssi:bootstrap first}
+  RUSTFS_SECRET_KEY: ${RUSTFS_SECRET_KEY:?Run pnpm ssi:bootstrap first}
   RUSTFS_API_CORS_ALLOW_ORIGIN: ${RUSTFS_API_CORS_ALLOW_ORIGIN:-*}
 
 services:
@@ -14,14 +14,14 @@ services:
     <<: *network
     image: timescale/timescaledb-ha:pg18-all
     ports:
-      - "5432:5432"
+      - "127.0.0.1:5432:5432"
     volumes:
       - db-data:/home/postgres/pgdata
     command: ["postgres", "-c", "log_statement=${POSTGRES_LOG_STATEMENT:-none}"]
     environment:
       - POSTGRES_DB=${POSTGRES_DB:-chatbotx}
       - POSTGRES_USER=${POSTGRES_USER:-chatbotx}
-      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD:-secretkey}
+      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD:?Run pnpm ssi:bootstrap first}
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -d $${POSTGRES_DB} -U $${POSTGRES_USER}"]
       interval: 10s
@@ -36,22 +36,22 @@ services:
       postgres:
         condition: service_healthy
     ports:
-      - "${ADMINER_PORT:-8080}:8080"
+      - "127.0.0.1:${ADMINER_PORT:-8080}:8080"
 
   mailhog:
     <<: *network
     image: mailhog/mailhog
     ports:
-      - 1025:1025
-      - 8025:8025
+      - "127.0.0.1:1025:1025"
+      - "127.0.0.1:8025:8025"
 
   filesystem:
     <<: *network
     image: rustfs/rustfs:latest
     command: server /data --console-address ":9001"
     ports:
-      - "9000:9000"
-      - "9001:9001"
+      - "127.0.0.1:9000:9000"
+      - "127.0.0.1:9001:9001"
     environment:
       <<: *rustfs-environment
     volumes:
@@ -87,7 +87,7 @@ services:
     <<: *network
     image: redis:8-alpine
     ports:
-      - "6379:6379"
+      - "127.0.0.1:6379:6379"
     volumes:
       - cache-data:/data
     healthcheck:
@@ -103,7 +103,7 @@ services:
       redis:
         condition: service_healthy
     ports:
-      - "5540:5540"
+      - "127.0.0.1:5540:5540"
     volumes:
       - redis-ui-data:/data
 

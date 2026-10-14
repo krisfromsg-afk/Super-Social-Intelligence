@@ -10,7 +10,7 @@ x-service-common: &service-common
     - ./.env
   # Container DNS differs from the localhost URLs in the host-side .env.
   environment: &internal-service-endpoints
-    DATABASE_URL: "postgresql://${POSTGRES_USER:-chatbotx}:${POSTGRES_PASSWORD:-secretkey}@postgres:5432/${POSTGRES_DB:-chatbotx}?schema=public"
+    DATABASE_URL: "postgresql://${POSTGRES_USER:-chatbotx}:${POSTGRES_PASSWORD:?Run pnpm ssi:bootstrap first}@postgres:5432/${POSTGRES_DB:-chatbotx}?schema=public"
     REDIS_URL: "redis://redis:6379"
     S3_ENDPOINT: "http://filesystem:9000"
   extra_hosts:
@@ -32,7 +32,7 @@ services:
       context: .
       dockerfile: apps/builder/docker/Dockerfile
     ports:
-      - "3123:3000"
+      - "127.0.0.1:3123:3000"
     depends_on:
       postgres:
         condition: service_healthy
@@ -78,7 +78,7 @@ services:
       context: .
       dockerfile: apps/javascript-executor/docker/Dockerfile
     environment:
-      JAVASCRIPT_EXECUTOR_TOKEN: ${JAVASCRIPT_EXECUTOR_TOKEN:-change-me-in-production-at-least-32-chars}
+      JAVASCRIPT_EXECUTOR_TOKEN: ${JAVASCRIPT_EXECUTOR_TOKEN:?Run pnpm ssi:bootstrap first}
       MAX_CONCURRENCY: ${MAX_CONCURRENCY:-2}
     networks:
       - javascript-executor-network
@@ -112,7 +112,7 @@ services:
       context: .
       dockerfile: apps/realtime/docker/Dockerfile
     ports:
-      - "1999:1999"
+      - "127.0.0.1:1999:1999"
 
 networks:
   javascript-executor-network:
