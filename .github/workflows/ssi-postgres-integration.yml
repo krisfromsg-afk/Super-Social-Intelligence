@@ -1,0 +1,100 @@
+name: SSI PostgreSQL Integration
+
+on:
+  push:
+    branches: ['feat/ssi-*']
+    paths:
+      - 'packages/database/**'
+      - 'packages/business/src/conversation/**'
+      - '.github/workflows/ssi-postgres-integration.yml'
+  pull_request:
+    paths:
+      - 'packages/database/**'
+      - 'packages/business/src/conversation/**'
+      - '.github/workflows/ssi-postgres-integration.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ssi-postgres-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  postgres-integration:
+    runs-on: ubuntu-latest
+    timeout-minutes: 65
+    services:
+      postgres:
+        image: timescale/timescaledb-ha:pg18-all
+        env:
+          POSTGRES_DB: ssi_ci
+          POSTGRES_USER: ssi_ci
+          POSTGRES_PASSWORD: ssi_ci_disposable_only
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U ssi_ci -d ssi_ci"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 15
+    env:
+      DATABASE_URL: postgresql://ssi_ci:ssi_ci_disposable_only@127.0.0.1:5432/ssi_ci?schema=public
+      CI: 'true'
+      VITEST_MAX_WORKERS: '2'
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Verify restricted source absence in tree and Git history
+        shell: bash
+        run: |
+          test ! -e apps/builder/src/enterprise
+          test ! -e packages/database/src/schema/enterprise
+          test ! -e packages/database/src/relations/enterprise
+          if git rev-list --objects HEAD | grep -E ' (apps/builder/src/enterprise/|packages/database/src/schema/enterprise/|packages/database/src/relations/enterprise/)'; then
+            echo "STOP-SHIP: prohibited source in ancestry" >&2
+            exit 1
+          fi
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: pnpm
+      - name: Install pinned dependencies
+        run: pnpm install --frozen-lockfile
+      - name: Provision isolated CI environment
+        shell: bash
+        run: |
+          pnpm ssi:bootstrap
+          node --input-type=module <<'NODE'
+          import {readFileSync,writeFileSync} from "node:fs"
+          const file=".env"
+          const env=readFileSync(file,"utf8")
+          const next=env.replace(/^DATABASE_URL=.*$/m,"DATABASE_URL="+process.env.DATABASE_URL)
+          if(next===env) throw Error("DATABASE_URL placeholder did not change")
+          writeFileSync(file,next,{mode:0o600})
+          NODE
+      - name: Verify database target is local and disposable
+        working-directory: packages/database
+        shell: bash
+        run: |
+          node -e '
+            const {Client}=require("pg");
+            const url=process.env.DATABASE_URL;
+            const u=new URL(url);
+            if(u.hostname!=="127.0.0.1" || u.pathname!=="/ssi_ci") throw Error("Refusing non-CI database");
+            const c=new Client({connectionString:url});
+            c.connect().then(()=>c.query("select current_database() as name"))
+              .then(r=>{if(r.rows[0]?.name!=="ssi_ci")throw Error("Unexpected database");console.log("SSI CI DB ready")})
+              .finally(()=>c.end()).catch(e=>{console.error(e);process.exitCode=1});
+          '
+      - name: Apply migrations on clean Postgres
+        run: pnpm --filter @chatbotx.io/database db:migrate
+      - name: Repeat migrations to verify idempotency
+        run: pnpm --filter @chatbotx.io/database db:migrate
+      - name: Run real PostgreSQL integration tests
+        run: pnpm --filter @chatbotx.io/database test:db
+      - name: Check migration snapshot drift
+        run: pnpm --filter @chatbotx.io/database db:check-drift
