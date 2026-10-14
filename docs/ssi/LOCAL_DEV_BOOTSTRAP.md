@@ -30,7 +30,7 @@ The bootstrap script **refuses to overwrite** an existing `.env` and creates a m
 
 The root `.env.example` uses `localhost` for host-side tools. The development Compose overlay replaces `DATABASE_URL`, `REDIS_URL` and `S3_ENDPOINT` with Docker service DNS for builder, worker and realtime. The realtime server resolves its builder-origin checks through `http://builder:3000`.
 
-The builder image automatically runs migrations and seed tasks on start in this development overlay. Use **a new disposable database volume** only; schema migrations were not certified on existing production data. The open-source license/source review and migration checks must be independently completed before any release.
+The builder image runs migrations but **does not create any demo user or shared-password account**. After the health check, open `http://localhost:3123/auth/sign-up` and create your own account, then sign in. Never reuse old public demo credentials. Use **a new disposable database volume** only; schema migrations were not certified on existing production data. The open-source license/source review and migration checks must be independently completed before any release.
 
 ## Troubleshooting and acceptance
 
@@ -58,3 +58,7 @@ If the health endpoint is unavailable, inspect migration/seed, PostgreSQL creden
 ### Configuration diagnostic
 
 Run `pnpm ssi:doctor` to check Node and the local `.env` configuration without showing secret values. Warnings indicate missing optional operator setup; errors fail the command. `pnpm ssi:doctor --live` additionally checks TCP connectivity to the configured PostgreSQL/Redis/object storage and calls the builder `/api/health` endpoint. This is a local operator aid, **not** production security certification; `--strict` makes warnings fatal for an operator-controlled readiness gate.
+
+### Migration note: no built-in demo login
+
+The previous upstream seed created a predictable verified demo account with a known password. SSI deliberately removed this behavior. On a fresh local stack, create the first user with the sign-up page; the operator's `PLATFORM_ADMIN_EMAIL` must match the desired administrator's email. Already-existing databases are **not altered** by this change; if they previously contained demo users, the operator must audit and disable those accounts separately. The `db:seed` command is now a compatibility no-op and does not add users or workspaces.

@@ -1,4 +1,4 @@
-name: chatbotx
+name: ssi-dev
 
 include:
   - docker-compose.yml
@@ -48,7 +48,7 @@ services:
     environment:
       <<: *internal-service-endpoints
       RUN_DB_MIGRATE: "true"
-      RUN_DB_SEED: "true"
+      RUN_DB_SEED: "false"
       REALTIME_INTERNAL_URL: "http://realtime:1999"
 
   # BullMQ Worker
