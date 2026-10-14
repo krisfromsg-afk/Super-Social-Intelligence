@@ -9,6 +9,7 @@ import {
   workspaceIdrequestParams,
 } from "@/features/common/schema"
 import { workspaceActionClient } from "@/lib/safe-action"
+import { assertSsiAiModePermission } from "./ssi-ai-mode-permissions"
 
 export const enableBotAction = workspaceActionClient
   .bindArgsSchemas(workspaceIdrequestParams)
@@ -21,8 +22,9 @@ export const enableBotAction = workspaceActionClient
     }: {
       bindArgsParsedInputs: WorkspaceIdRequestParams
       parsedInput: BulkUpdateIdsRequest
-      ctx: { user: UserModel }
+      ctx: { user: UserModel; workspaceMemberPermissions: Record<string, unknown>; isSupportSession: boolean }
     }) => {
+      assertSsiAiModePermission(ctx.workspaceMemberPermissions, "autopilot", ctx.isSupportSession)
       await conversationService.setBotEnabledByIds({
         workspaceId,
         ids: parsedInput.ids,

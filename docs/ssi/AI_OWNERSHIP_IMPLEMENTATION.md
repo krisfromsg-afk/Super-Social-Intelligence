@@ -42,3 +42,7 @@ The SSI mode mutation server action now checks **workspace member permissions, n
 ## 2026-10-14 malformed-control CAS hardening
 
 `setSsiAiMode` now protects PostgreSQL's version cast with a typed `CASE` predicate. Only absent SSI control (legacy version zero) or a recognized object containing a positive integer version and recognized mode may win the CAS. An explicit invalid `ssiAiControl` value, an array/scalar `additionalAttributes`, or a nonnumeric/oversized version fails the update instead of being misclassified as legacy or triggering a raw PostgreSQL cast exception. In all cases the API fails closed; it never silently enables Autopilot. Existing workspace-scoped match and version increments are preserved.
+
+## 2026-10-14 legacy Inbox bot toggle permission parity
+
+The original `enableBotAction`, `disableBotAction`, and `keepHumanOnlyAction` now call the same workspace-scoped SSI mode permission guard as `setSsiAiModeAction`. This closes the old action path where any authenticated workspace member could re-enable legacy automatic sending without `flows` authorization. Human stopping automation requires Inbox/contacts permissions; support impersonation cannot mutate these actions. Neither this check nor mode CAS replaces the atomic send-claim/outbox requirement.
