@@ -73,6 +73,9 @@ describe("SSI Copilot staging service (NO dispatch)", () => {
     const predicate = JSON.stringify(mocks.where.mock.calls[0])
     expect(predicate).toContain("pending")
     expect(predicate).toContain("modeVersion")
+    expect(predicate).toContain("jsonb_typeof")
+    expect(predicate).toContain("BETWEEN 1 AND 8000")
+    expect(predicate).toContain("updatedBy")
     expect(mocks.set).toHaveBeenCalledTimes(1)
   })
 

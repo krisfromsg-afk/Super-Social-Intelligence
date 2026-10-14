@@ -121,6 +121,12 @@ export const ssiCopilotDraftService = {
         sql`${currentDraft}->>'status' = 'pending'`,
         sql`${currentDraft}->>'modeVersion' = ${String(props.expectedModeVersion)}`,
         sql`${currentDraft}->>'origin' = 'operator'`,
+        // Even a tampered pending record cannot be approved without a valid
+        // text body. Validate within the locked UPDATE, not a stale app read.
+        sql`jsonb_typeof(${currentDraft}->'text') = 'string'`,
+        sql`length(btrim(${currentDraft}->>'text')) BETWEEN 1 AND 8000`,
+        sql`jsonb_typeof(${currentDraft}->'updatedBy') = 'string'`,
+        sql`length(btrim(${currentDraft}->>'updatedBy')) > 0`,
       ))
       .returning({ id: conversationModel.id })
     if (!updated) throw new Error("Copilot review lost the race or mode changed; refresh and retry")

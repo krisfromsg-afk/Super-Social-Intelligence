@@ -30,3 +30,7 @@ If a conversation switches out of Copilot and returns, the original staged draft
 ### Explicit no-send safeguard
 
 The Ownership Safety CI includes a source-level no-send tripwire for staging actions: a future change that wires `messageService.createOutgoing`, BullMQ queues or direct channel sends into `approve` must fail and receive a deliberate separate outbox review. The unit test for the business staging service also asserts `approved_not_sent` and optimistic-CAS predicates. This tripwire is a review aid, not proof that every possible provider dispatch path is safe.
+
+### Corrupted pending-record defense
+
+Review uses the same locked SQL UPDATE that checks both CAS versions and the Copilot mode. It now also requires a nonblank 1–8000-character text body and a nonblank operator identity in the persisted JSONB record; it cannot approve an empty/tampered pending stub merely because its version and status fields appear valid. Record-integrity checks remain defense in depth, not a substitute for append-only audit, provider send idempotency or a full migration to a dedicated table.
