@@ -10,7 +10,7 @@ import {
 import { workspaceActionClient } from "@/lib/safe-action"
 
 const request = z.object({
-  conversationId: z.string().regex(/^\\d+$/),
+  conversationId: z.string().regex(/^\d+$/),
   expectedVersion: z.number().int().min(0).max(2147483646),
   mode: z.enum(["human_only", "copilot", "autopilot"]),
 })

@@ -15,6 +15,7 @@ const {
   mockBroadcastToWorkspaceParty,
   mockRecordPermanentGrant,
   mockMarkReadByOutbound,
+  mockFindConversationUncached,
 } = vi.hoisted(() => {
   const updateChain = {
     set: vi.fn().mockReturnThis(),
@@ -45,6 +46,9 @@ const {
     mockBroadcastToWorkspaceParty: vi.fn().mockResolvedValue(undefined),
     mockRecordPermanentGrant: vi.fn().mockResolvedValue(undefined),
     mockMarkReadByOutbound: vi.fn().mockResolvedValue(true),
+    mockFindConversationUncached: vi.fn().mockResolvedValue({
+      id: "conv-1", workspaceId: "ws-1", botEnabled: true, additionalAttributes: null,
+    }),
   }
 })
 
@@ -60,7 +64,12 @@ vi.mock("@chatbotx.io/business", () => ({
     recordSendFailure: mockRecordSendFailure,
   },
   contactService: { unblockIfBlocked: mockContactUnblockIfBlocked },
-  conversationService: { markReadByOutbound: mockMarkReadByOutbound },
+  conversationService: {
+    markReadByOutbound: mockMarkReadByOutbound,
+    findByUncached: mockFindConversationUncached,
+  },
+  // Policy tests cover denial modes; these handler tests exercise delivery.
+  isSsiAutomatedSendAllowed: vi.fn((row: { botEnabled: boolean }) => row.botEnabled === true),
   broadcastToWorkspaceParty: mockBroadcastToWorkspaceParty,
   publishToWorkspaceParty: mockBroadcastToWorkspaceParty,
   whatsappCallPermissionService: {
@@ -161,6 +170,9 @@ describe("chat send-message handlers", () => {
     })
     mockContactUnblockIfBlocked.mockResolvedValue(null)
     mockMarkReadByOutbound.mockResolvedValue(true)
+    mockFindConversationUncached.mockResolvedValue({
+      id: "conv-1", workspaceId: "ws-1", botEnabled: true, additionalAttributes: null,
+    })
     mockResolveIntegrationContextFromContactInbox.mockResolvedValue({
       ctx: { workspaceId: "ws-1" },
       integration: {

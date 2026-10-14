@@ -88,6 +88,7 @@
     "conversations/keep-human-only.action:keepHumanOnlyAction": "private:workspace-authenticated takeover; public API requires separate permission and abuse review",
     "conversations/follow-conversation.action:followConversationAction": "covered:conversations",
     "conversations/read-conversation.action:readConversationAction": "covered:conversations",
+    "conversations/set-ssi-ai-mode.action:setSsiAiModeAction": "private:workspace-authorized SSI ownership control; public API needs explicit tenant and permission review",
     "conversations/sync-thread-owner.action:syncThreadOwnerAction": "covered:conversations",
     "conversations/thread-control.action:threadControlAction": "covered:conversations",
     "conversations/unarchive-conversation.action:unarchiveConversationAction": "covered:conversations",

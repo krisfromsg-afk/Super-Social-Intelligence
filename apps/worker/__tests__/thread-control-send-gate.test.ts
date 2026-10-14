@@ -10,6 +10,7 @@ const mocks = vi.hoisted(() => ({
   recordSendFailure: vi.fn().mockResolvedValue(undefined),
   recordEvent: vi.fn(),
   refreshForRouting: vi.fn(),
+  findConversationUncached: vi.fn(),
   loggerWarn: vi.fn(),
 }))
 
@@ -25,7 +26,12 @@ vi.mock("@chatbotx.io/business", () => ({
     recordSendFailure: mocks.recordSendFailure,
   },
   contactService: { unblockIfBlocked: vi.fn().mockResolvedValue(null) },
-  conversationService: { markReadByOutbound: vi.fn().mockResolvedValue(true) },
+  conversationService: {
+    markReadByOutbound: vi.fn().mockResolvedValue(true),
+    findByUncached: mocks.findConversationUncached,
+  },
+  // SSI ownership is allowed for these independent thread-control cases.
+  isSsiAutomatedSendAllowed: vi.fn((row: { botEnabled: boolean }) => row.botEnabled === true),
   publishToWorkspaceParty: vi.fn(),
   broadcastToWorkspaceParty: vi.fn(),
   whatsappCallPermissionService: { recordPermanentGrant: vi.fn() },
@@ -166,6 +172,9 @@ const rejection = (code: number) =>
 
 beforeEach(() => {
   vi.clearAllMocks()
+  mocks.findConversationUncached.mockResolvedValue({
+    id: "conv-1", workspaceId: "ws-1", botEnabled: true, additionalAttributes: null,
+  })
   vi.useFakeTimers()
   // Sub-second clock: our own events must be recorded at Meta's whole-second
   // resolution (`occurredAt: NOW`), so a same-second handover still wins.
