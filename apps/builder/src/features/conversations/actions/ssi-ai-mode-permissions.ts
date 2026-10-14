@@ -1,4 +1,4 @@
-import type { SsiAiMode } from "@chatbotx.io/business/conversation"
+import type { SsiAiMode } from "@chatbotx.io/business"
 import {
   hasContactsAccess,
   hasWorkspacePermission,
