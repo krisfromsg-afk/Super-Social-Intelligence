@@ -90,6 +90,8 @@ jobs:
             echo "ERROR: local bootstrap overwrote an existing environment" >&2
             exit 1
           fi
+      - name: Test local config diagnostic
+        run: node --test scripts/ssi/__tests__/doctor.test.mjs
       - name: Validate local config diagnostic without exposing secrets
         run: pnpm ssi:doctor
       - name: Enforce SSI licensing stop-ship

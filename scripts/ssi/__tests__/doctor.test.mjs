@@ -1,4 +1,4 @@
-import { describe, expect, test } from "node:test"
+import { describe, test } from "node:test"
 import { strict as assert } from "node:assert"
 import { assessLocalConfiguration, readDotEnv } from "../doctor.mjs"
 

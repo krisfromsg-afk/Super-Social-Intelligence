@@ -6,7 +6,6 @@
 import { readFile } from "node:fs/promises"
 import { connect } from "node:net"
 import { fileURLToPath } from "node:url"
-import { join } from "node:path"
 
 export function readDotEnv(contents) {
   const entries = {}
