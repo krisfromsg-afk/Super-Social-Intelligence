@@ -7,6 +7,7 @@ import { useTranslations } from "next-intl"
 import { useEffect, useState } from "react"
 import { useTenantSettings } from "@/features/tenant"
 import { useCurrentTheme } from "@/hooks/use-current-theme"
+import { resolveSsiLegalLinks } from "../legal-policy-links"
 
 export type AuthHeaderProps = {
   title: string
@@ -48,19 +49,23 @@ export const AcceptTermsAndPolicy = ({
   termsOfService,
   privacyPolicy,
 }: {
-  termsOfService: string
-  privacyPolicy: string
+  termsOfService?: string | null
+  privacyPolicy?: string | null
 }) => {
   const t = useTranslations()
+  const links = resolveSsiLegalLinks({ termsOfService, privacyPolicy })
+  // Do not assert that registration accepts another vendor's terms or
+  // render partial/untrusted legal URLs. Deployment policy remains a gate.
+  if (!links) return null
 
   return (
     <div className="text-balance text-center text-muted-foreground text-xs [&_a]:underline [&_a]:underline-offset-4 hover:[&_a]:text-primary">
       <span>{t("auth.acceptTermsAndPolicy")}</span>{" "}
-      <Link href={termsOfService} target="_blank">
+      <Link href={links.termsOfService} target="_blank" rel="noopener noreferrer">
         {t("auth.termsOfService")}
       </Link>{" "}
       <span>{t("auth.and")}</span>{" "}
-      <Link href={privacyPolicy} target="_blank">
+      <Link href={links.privacyPolicy} target="_blank" rel="noopener noreferrer">
         {t("auth.privacyPolicy")}
       </Link>
     </div>
