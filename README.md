@@ -15,6 +15,12 @@ SSI aims to combine a unified social inbox, AI Agent/Copilot/Autopilot with huma
 
 See [SSI delivery status](docs/ssi/PHASE_STATUS.md), [master plan](docs/ssi/MASTER_PLAN.md), [Phase 2 acceptance plan](docs/ssi/PHASE02_COMPLETION_PLAN.md), [RAG architecture](docs/ssi/RAG_ARCHITECTURE.md), and [upstream policy](docs/ssi/UPSTREAM_POLICY.md).
 
+## Local development (experimental)
+
+The canonical PR branch has an opt-in local Docker stack. On a **fresh development machine only**, run `pnpm ssi:bootstrap` to generate a private `.env` with distinct random credentials, set `PLATFORM_ADMIN_EMAIL` in `.env`, then run `docker compose -f docker-compose.dev.yml up --build -d`. The app health endpoint is `http://localhost:3123/api/health`.
+
+See [local bootstrap and troubleshooting](docs/ssi/LOCAL_DEV_BOOTSTRAP.md) before starting. The generated environment is **not** a production configuration. Do not run this stack against an existing customer database; migration compatibility and live integrations are still unverified.
+
 ## Source and licensing
 
 The project builds on Community Edition source from [ChatbotX](https://github.com/ChatbotXIO/ChatbotX) with retained MIT/third-party notices. Certain source areas have different licensing; no restricted source should be copied into SSI without permission. The [commercial-source blocker](https://github.com/krisfromsg-afk/Super-Social-Intelligence/issues/4) is still open pending provenance verification. Spider Hubs-authored features are developed separately.

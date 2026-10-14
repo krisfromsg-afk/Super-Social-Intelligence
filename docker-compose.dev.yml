@@ -8,6 +8,11 @@ x-service-common: &service-common
   restart: unless-stopped
   env_file:
     - ./.env
+  # Container DNS differs from the localhost URLs in the host-side .env.
+  environment: &internal-service-endpoints
+    DATABASE_URL: "postgresql://${POSTGRES_USER:-chatbotx}:${POSTGRES_PASSWORD:-secretkey}@postgres:5432/${POSTGRES_DB:-chatbotx}?schema=public"
+    REDIS_URL: "redis://redis:6379"
+    S3_ENDPOINT: "http://filesystem:9000"
   extra_hosts:
     - "host.docker.internal:host-gateway"
   networks:
@@ -41,9 +46,10 @@ services:
       timeout: 10s
       retries: 3
     environment:
-      - RUN_DB_MIGRATE=true
-      - RUN_DB_SEED=true
-      - REALTIME_INTERNAL_URL=http://realtime:1999
+      <<: *internal-service-endpoints
+      RUN_DB_MIGRATE: "true"
+      RUN_DB_SEED: "true"
+      REALTIME_INTERNAL_URL: "http://realtime:1999"
 
   # BullMQ Worker
   worker:
@@ -61,8 +67,9 @@ services:
       javascript-executor:
         condition: service_healthy
     environment:
-      - JAVASCRIPT_EXECUTOR_URL=http://javascript-executor:3210
-      - REALTIME_INTERNAL_URL=http://realtime:1999
+      <<: *internal-service-endpoints
+      JAVASCRIPT_EXECUTOR_URL: "http://javascript-executor:3210"
+      REALTIME_INTERNAL_URL: "http://realtime:1999"
 
   javascript-executor:
     platform: linux/amd64
@@ -97,6 +104,10 @@ services:
 
   realtime:
     <<: *service-common
+    environment:
+      <<: *internal-service-endpoints
+      # Server-side origin validation must reach the builder on Docker DNS.
+      NEXT_PUBLIC_BUILDER_URL: "http://builder:3000"
     build:
       context: .
       dockerfile: apps/realtime/docker/Dockerfile
