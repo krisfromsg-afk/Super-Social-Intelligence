@@ -51,3 +51,11 @@ jobs:
             }
           fi
           echo "SSI path/history/nested-license boundary passed; broader legal review still required."
+      - name: Generate tracked-source license provenance inventory
+        run: node scripts/ssi/report-source-provenance.mjs > "$RUNNER_TEMP/ssi-source-provenance.json"
+      - name: Preserve reviewable inventory
+        uses: actions/upload-artifact@v4
+        with:
+          name: ssi-source-license-inventory
+          path: ${{ runner.temp }}/ssi-source-provenance.json
+          retention-days: 30

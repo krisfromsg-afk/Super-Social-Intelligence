@@ -30,3 +30,9 @@ Original ChatbotX upstream attribution and MIT notice must not be removed to mak
 ## Legacy references
 
 Earlier PR #1/#2 were closed without merging; their historical commits may remain reachable through stale branch or GitHub PR/cached references until those refs are separately cleaned. Retargeting branch heads does not guarantee deletion from GitHub's object database. Review the affected public history and consult GitHub Support for cache/pull-request retention if needed.
+
+## 2026-10-14 tracked-source provenance inventory
+
+Added `scripts/ssi/report-source-provenance.mjs`, executed by the dedicated commercial-source CI. It enumerates **tracked** license/NOTICE/COPYING files and app/package/integration manifests, records SHA-256 file identities and SPDX-like package license declarations, flags missing package license fields for review, and refuses the known forbidden source paths or nested ChatbotX Commercial License. CI uploads a machine-readable JSON inventory. It reports `legalClearance: NOT_ESTABLISHED` explicitly.
+
+This is an aid for the required license and asset provenance review, **not legal permission** to relicense Community source, distribute commercial subtrees, or purge GitHub cached history. Transitive dependency licenses, embedded image/font/artifact provenance, historical references and exact scope still require independent review and appropriate upstream/legal clarification.
