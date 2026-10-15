@@ -8,8 +8,17 @@ import { readSsiCopilotDraft, type SsiCopilotDraftStatus, validateSsiCopilotDraf
  * so a switch Copilot -> Human Only -> Copilot invalidates old draft reviews.
  */
 const attr = conversationModel.additionalAttributes
-const current = sql`COALESCE(${attr}, '{}'::jsonb)`
-const currentDraft = sql`${attr}->'ssiCopilotDraft'`
+
+// Build SQL only when a service operation runs. This module is re-exported by
+// the shared business barrel: importing unrelated APIs must not execute SQL or
+// require a live database adapter (including deliberately narrow test mocks).
+function current() {
+  return sql`COALESCE(${attr}, '{}'::jsonb)`
+}
+
+function currentDraft() {
+  return sql`${attr}->'ssiCopilotDraft'`
+}
 
 function copilotModeGuard(expectedModeVersion: number) {
   return sql`(
@@ -24,10 +33,10 @@ function draftVersionGuard(expectedDraftVersion: number) {
   return sql`(CASE
     WHEN ${attr} IS NULL THEN 0
     WHEN jsonb_typeof(${attr}) = 'object' AND NOT (${attr} ? 'ssiCopilotDraft') THEN 0
-    WHEN jsonb_typeof(${currentDraft}) = 'object'
-      AND jsonb_typeof(${currentDraft}->'version') = 'number'
-      AND (${currentDraft}->>'version') ~ '^[1-9][0-9]{0,9}$'
-    THEN (${currentDraft}->>'version')::bigint
+    WHEN jsonb_typeof(${currentDraft()}) = 'object'
+      AND jsonb_typeof(${currentDraft()}->'version') = 'number'
+      AND (${currentDraft()}->>'version') ~ '^[1-9][0-9]{0,9}$'
+    THEN (${currentDraft()}->>'version')::bigint
     ELSE -1
   END) = ${expectedDraftVersion}`
 }
@@ -75,7 +84,7 @@ export const ssiCopilotDraftService = {
     }
     // Explicitly operator-authored: never pass user text as verified AI output.
     const [updated] = await db.update(conversationModel)
-      .set({ additionalAttributes: sql`jsonb_set(${current}, '{ssiCopilotDraft}', ${JSON.stringify(draft)}::jsonb, true)` })
+      .set({ additionalAttributes: sql`jsonb_set(${current()}, '{ssiCopilotDraft}', ${JSON.stringify(draft)}::jsonb, true)` })
       .where(and(
         eq(conversationModel.id, props.conversationId),
         eq(conversationModel.workspaceId, props.workspaceId),
@@ -112,8 +121,8 @@ export const ssiCopilotDraftService = {
     const [updated] = await db.update(conversationModel)
       .set({
         additionalAttributes: sql`jsonb_set(
-          ${current}, '{ssiCopilotDraft}',
-          (${currentDraft} || ${JSON.stringify(revised)}::jsonb), true
+          ${current()}, '{ssiCopilotDraft}',
+          (${currentDraft()} || ${JSON.stringify(revised)}::jsonb), true
         )`,
       })
       .where(and(
@@ -121,15 +130,15 @@ export const ssiCopilotDraftService = {
         eq(conversationModel.workspaceId, props.workspaceId),
         copilotModeGuard(props.expectedModeVersion),
         draftVersionGuard(props.expectedDraftVersion),
-        sql`${currentDraft}->>'status' = 'pending'`,
-        sql`${currentDraft}->>'modeVersion' = ${String(props.expectedModeVersion)}`,
-        sql`${currentDraft}->>'origin' = 'operator'`,
+        sql`${currentDraft()}->>'status' = 'pending'`,
+        sql`${currentDraft()}->>'modeVersion' = ${String(props.expectedModeVersion)}`,
+        sql`${currentDraft()}->>'origin' = 'operator'`,
         // Even a tampered pending record cannot be approved without a valid
         // text body. Validate within the locked UPDATE, not a stale app read.
-        sql`jsonb_typeof(${currentDraft}->'text') = 'string'`,
-        sql`length(btrim(${currentDraft}->>'text')) BETWEEN 1 AND 8000`,
-        sql`jsonb_typeof(${currentDraft}->'updatedBy') = 'string'`,
-        sql`length(btrim(${currentDraft}->>'updatedBy')) > 0`,
+        sql`jsonb_typeof(${currentDraft()}->'text') = 'string'`,
+        sql`length(btrim(${currentDraft()}->>'text')) BETWEEN 1 AND 8000`,
+        sql`jsonb_typeof(${currentDraft()}->'updatedBy') = 'string'`,
+        sql`length(btrim(${currentDraft()}->>'updatedBy')) > 0`,
       ))
       .returning({ id: conversationModel.id })
     if (!updated) throw new Error("Copilot review lost the race or mode changed; refresh and retry")
