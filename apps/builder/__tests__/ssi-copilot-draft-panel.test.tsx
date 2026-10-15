@@ -45,10 +45,30 @@ vi.mock("@chatbotx.io/ui/components/ui/button", () => ({
 
 const { SsiCopilotDraftPanel } = await import("@/features/ssi-inbox/copilot-draft-panel")
 
-const conversation = {
-  id: "c1", workspaceId: "w1", botEnabled: false,
+// Keep the fixture checked against the full resource contract, without a cast.
+const conversation: ConversationResource = {
+  id: "c1",
+  workspaceId: "w1",
+  contactId: "contact1",
+  botEnabled: false,
+  botResumeAt: null,
+  archivedAt: null,
   additionalAttributes: { ssiAiControl: { mode: "copilot", version: 4 } },
-} as ConversationResource
+  contactLastReadAt: null,
+  agentLastReadAt: null,
+  aiContextLastMessageId: null,
+  lastActivityAt: null,
+  followed: false,
+  assignedUserId: null,
+  assignedInboxTeamId: null,
+  sourceId: null,
+  lastStep: null,
+  currentStep: null,
+  adminRepliedAt: null,
+  contactRepliedAt: null,
+  createdAt: new Date("2026-10-15T00:00:00.000Z"),
+  updatedAt: new Date("2026-10-15T00:00:00.000Z"),
+}
 const pending: SsiCopilotDraft = {
   version: 2, modeVersion: 4, origin: "operator", status: "pending",
   text: "Saved reply", updatedBy: "u1", updatedAt: "2026-10-15T00:00:00.000Z",
