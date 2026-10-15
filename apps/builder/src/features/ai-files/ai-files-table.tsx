@@ -37,6 +37,7 @@ import { useRouter } from "next/navigation"
 import { useTranslations } from "next-intl"
 import prettyBytes from "pretty-bytes"
 import { use, useMemo, useState } from "react"
+import { SsiPublicationPanel } from "@/features/ssi-ai-governance/publication-panel"
 import { AIFileProcessingStatus } from "./ai-file-processing-status"
 import { AIFilesCreate } from "./ai-files-create"
 import { DeleteAIFileDialog } from "./delete-ai-file-dialog"
@@ -90,6 +91,7 @@ function RowActionCell({ aiFile }: { aiFile: AIFileWithProcessing }) {
         </DropdownMenuContent>
       </DropdownMenu>
 
+      <details className="mt-1"><summary className="cursor-pointer text-xs">SSI publication</summary><SsiPublicationPanel kind="knowledge" workspaceId={aiFile.workspaceId} resourceId={aiFile.id} /></details>
       <DeleteAIFileDialog
         aiFile={aiFile}
         onSuccess={() => {

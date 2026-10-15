@@ -24,7 +24,7 @@ jobs:
           POSTGRES_PASSWORD: ssi_ci_disposable_only
         ports: ['5432:5432']
         options: >-
-          --health-cmd 'pg_isready -U ssi_ci -d ssi_ci'
+          --health-cmd "pg_isready -U ssi_ci -d ssi_ci"
           --health-interval 10s --health-timeout 5s --health-retries 15
     env:
       CI: 'true'

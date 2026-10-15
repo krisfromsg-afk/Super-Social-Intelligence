@@ -39,6 +39,7 @@ import { useTranslations } from "next-intl"
 import { useEffect, useMemo } from "react"
 import { useFieldArray } from "react-hook-form"
 import { toast } from "sonner"
+import { SsiPublicationPanel } from "@/features/ssi-ai-governance/publication-panel"
 import { PlainTextEditorField } from "@/components/tiptap/plain-text-editor-field"
 import { updateAIAgentAction } from "@/features/ai-agents/actions/update.action"
 import { getAiProviderLabelKey } from "@/features/ai-agents/lib/ai-provider-label"
@@ -370,6 +371,7 @@ export function UpdateAIAgentDialog({
               </p>
             </div>
 
+            {agent && <SsiPublicationPanel kind="persona" workspaceId={workspaceId} resourceId={agent.id} disabled={form.formState.isDirty || form.formState.isSubmitting} />}
             <DialogFooter className="justify-end gap-2 sm:gap-2">
               <Button
                 onClick={() => onOpenChange(false)}
