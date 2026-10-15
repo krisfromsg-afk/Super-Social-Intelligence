@@ -1,6 +1,6 @@
 import { and, db, eq, sql } from "@chatbotx.io/database/client"
 import { conversationModel } from "@chatbotx.io/database/schema"
-import { readSsiCopilotDraft, validateSsiCopilotDraftInput } from "./ssi-copilot-draft-state"
+import { readSsiCopilotDraft, type SsiCopilotDraftStatus, validateSsiCopilotDraftInput } from "./ssi-copilot-draft-state"
 
 /**
  * Transactional single-row staging only. No message insert, enqueue or send.
@@ -94,7 +94,10 @@ export const ssiCopilotDraftService = {
     expectedModeVersion: number
     expectedDraftVersion: number
     decision: "approve" | "reject"
-  }) {
+  }): Promise<{
+    version: number
+    status: Exclude<SsiCopilotDraftStatus, "pending">
+  }> {
     validateSsiCopilotDraftInput(props)
     if (props.decision !== "approve" && props.decision !== "reject") {
       throw new Error("Invalid Copilot review decision")
