@@ -23,32 +23,30 @@ jobs:
       - run: pnpm ssi:bootstrap
       - name: Generate reviewed additive SSI tables without accessing a database
         run: pnpm --filter @chatbotx.io/database exec drizzle-kit generate --name=ssi_ai_evidence
-      - name: Verify exact allowed migration scope
+      - name: Verify exact reviewed SQL (including non-destructive FK cascade declarations)
         run: |
           node <<'NODE'
           const fs = require('node:fs');
           const path = require('node:path');
+          const {createHash} = require('node:crypto');
           const root = 'packages/database/drizzle';
           const dirs = fs.readdirSync(root).filter(n => n.endsWith('_ssi_ai_evidence'));
           if (dirs.length !== 1) throw new Error('Expected one SSI evidence migration');
-          const sql = fs.readFileSync(path.join(root, dirs[0], 'migration.sql'), 'utf8');
-          const tables = ['SsiAiRun','SsiCopilotOutbox','SsiCopilotRevision','SsiKnowledgeChunk','SsiKnowledgeVersion','SsiPersonaVersion'];
-          const created = [...sql.matchAll(/CREATE TABLE "([^"]+)"/g)].map(m => m[1]).sort();
-          if (JSON.stringify(created) !== JSON.stringify(tables.sort())) throw new Error('Unexpected schema scope');
-          if (/\b(DROP|DELETE|TRUNCATE|UPDATE|INSERT|RENAME)\b/i.test(sql)) throw new Error('Non-additive migration rejected');
-          for (const m of sql.matchAll(/ALTER TABLE "([^"]+)"/g)) if (!tables.includes(m[1])) throw new Error('Existing table alteration rejected');
-          fs.writeFileSync('ssi-migration-directory.txt', dirs[0] + '\n');
+          const sql = fs.readFileSync(path.join(root, dirs[0], 'migration.sql'));
+          // Exact digest of inspected six-table additive SQL from run 38773880835.
+          // A keyword search for DELETE incorrectly rejected ON DELETE CASCADE
+          // on the new tables. Exact-byte approval is stricter than that search.
+          if (createHash('sha256').update(sql).digest('hex') !== '6ab00847a709f14f090332f3cc478a84d72ff7cb13c0340330fa78ce2aacdd1c') throw new Error('SQL differs from reviewed additive migration');
           NODE
       - uses: actions/upload-artifact@v4
         with:
           name: ssi-schema-${{ github.sha }}
-          path: |
-            packages/database/drizzle/*ssi_ai_evidence/**
+          path: packages/database/drizzle/*ssi_ai_evidence/**
           retention-days: 1
           if-no-files-found: error
   record-reviewed-migration:
-    # Records generated SQL/snapshot on the development branch only. It does
-    # not run migrations, change production, merge, or bypass acceptance gates.
+    # Records only the generated SQL/snapshot on the development branch.
+    # No database access, production deploy, merge, or bypass of release gates.
     needs: generate
     if: github.repository == 'krisfromsg-afk/Super-Social-Intelligence' && github.ref == 'refs/heads/feat/ssi-clean-history-rebuild'
     permissions:
