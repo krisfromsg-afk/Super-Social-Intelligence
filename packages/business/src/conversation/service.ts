@@ -55,6 +55,7 @@ import {
 } from "@chatbotx.io/worker-config"
 import type { PgUpdateSetSource } from "drizzle-orm/pg-core"
 import { BaseService } from "../base.service"
+import { mergeChannelConversationId } from "./channel-conversation-id"
 import type { SsiAiMode } from "./ssi-ai-control"
 import { contactService } from "../contact"
 import type {
@@ -702,17 +703,12 @@ class ConversationService extends BaseService {
       return conversation
     }
 
-    const updated = await tx
-      .update(conversationModel)
-      .set({
-        additionalAttributes: {
-          ...conversation.additionalAttributes,
-          channelConversationId,
-        },
-      })
-      .where(eq(conversationModel.id, conversation.id))
-      .returning()
-      .then((result) => result[0])
+    const [updated] = await mergeChannelConversationId({
+      workspaceId: conversation.workspaceId,
+      conversationId: conversation.id,
+      channelConversationId,
+      tx,
+    })
 
     if (!updated) {
       return conversation
