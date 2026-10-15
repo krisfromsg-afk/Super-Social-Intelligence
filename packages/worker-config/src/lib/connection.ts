@@ -1,0 +1,112 @@
+import { createRedisConnection } from "@chatbotx.io/redis"
+import type { default as IORedis, RedisOptions } from "ioredis"
+import { keys } from "../keys"
+import type { QueueName } from "./types"
+
+const connectionsByGroup: Record<QueueGroup, IORedis | null> = {
+  hot: null,
+  bulk: null,
+}
+const env = keys()
+
+/**
+ * True when no Redis is reachable and module-scope consumers must not dial:
+ * `next build` collecting page data, and vitest (setup-env points REDIS_URL at
+ * the non-routable 127.0.0.1:1, and an eager client would retry forever).
+ */
+export function isNoRedisEnv(): boolean {
+  return (
+    process.env.NEXT_PHASE === "phase-production-build" ||
+    process.env.VITEST === "true"
+  )
+}
+
+export type QueueGroup = "hot" | "bulk"
+
+export const queueGroupByName: Record<QueueName, QueueGroup> = {
+  integration: "hot",
+  chat: "hot",
+  aiAgent: "bulk",
+  heavy: "bulk",
+  schedule: "bulk",
+  trigger: "bulk",
+  webhook: "bulk",
+  default: "bulk",
+  // Uses sequenceConnections directly.
+  sequenceScheduler: "hot",
+  // Has no Queue or Worker.
+  broadcast: "hot",
+  quota: "bulk",
+  notification: "hot",
+  callTranscription: "hot",
+  whatsappVoipSignaling: "hot",
+  low: "hot",
+  // Rate-limited background enrichment; must not compete with chat/integration.
+  profileSnapshot: "bulk",
+}
+
+function resolveGroupUrl(group: QueueGroup): string {
+  const queueUrl = env.REDIS_QUEUE_URL ?? env.REDIS_URL
+  if (group === "bulk") {
+    return env.REDIS_QUEUE_BULK_URL ?? queueUrl
+  }
+  return queueUrl
+}
+
+export function getRedisConnection(group: QueueGroup) {
+  const existing = connectionsByGroup[group]
+  if (existing) {
+    return existing
+  }
+
+  const options: RedisOptions = {
+    maxRetriesPerRequest: null,
+    enableReadyCheck: true,
+    // Module-scope consumers (event buses, queues) are evaluated while
+    // `next build` collects page data with no Redis reachable, and under
+    // vitest (setup-env points REDIS_URL at the non-routable 127.0.0.1:1);
+    // lazyConnect keeps these from dialing in an infinite retry loop.
+    lazyConnect: isNoRedisEnv(),
+    retryStrategy: (times) => {
+      const delay = Math.min(times * 50, 2000)
+      return delay
+    },
+    reconnectOnError: (err) => {
+      const targetError = "READONLY"
+      if (err.message.includes(targetError)) {
+        return true
+      }
+      return false
+    },
+  }
+
+  const connection = createRedisConnection(resolveGroupUrl(group), options)
+  connectionsByGroup[group] = connection
+
+  return connection
+}
+
+export const getQueueConnection = (name: QueueName) =>
+  getRedisConnection(queueGroupByName[name])
+
+export const defaultJobOptions = {
+  attempts: 2,
+  backoff: {
+    type: "exponential",
+    delay: 5000,
+  },
+}
+
+export const defaultWorkerOptions = {
+  concurrency: 5,
+  removeOnComplete: { count: 1000 },
+  removeOnFail: { count: 5000 },
+}
+
+// Queue is required Redis connection, so we need to provide a fake queue for the production build
+export const fakeQueue = {
+  add: () => Promise.resolve(""),
+  addBulk: () => Promise.resolve(""),
+  getJob: () => Promise.resolve(undefined),
+  remove: () => Promise.resolve(0),
+}

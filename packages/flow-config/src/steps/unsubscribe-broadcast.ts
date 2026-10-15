@@ -1,0 +1,22 @@
+import { createId, zodBigintAsString } from "@chatbotx.io/utils"
+import { z } from "zod"
+import { stepTypes } from "./step-action"
+
+export const unsubscribeBroadcastStepSchema = z.object({
+  id: zodBigintAsString().describe(
+    "Step id (numeric string), unique within the flow.",
+  ),
+  stepType: z
+    .literal(stepTypes.enum.unsubscribeBroadcast)
+    .describe('Step type discriminator: "unsubscribeBroadcast".'),
+})
+
+export type UnsubscribeBroadcastStepSchema = z.infer<
+  typeof unsubscribeBroadcastStepSchema
+>
+
+export const unsubscribeBroadcastStepDefaultFn =
+  (): UnsubscribeBroadcastStepSchema => ({
+    id: createId(),
+    stepType: stepTypes.enum.unsubscribeBroadcast,
+  })

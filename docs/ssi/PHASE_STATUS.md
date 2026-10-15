@@ -12,8 +12,8 @@ The acceptance script `scripts/ssi/audit-phase-0-2.mjs` and `.github/workflows/s
 | Phase | Audited result | Verified source | Remaining hard gates |
 | --- | --- | --- | --- |
 | Phase 00 · License-safe bootstrap | **PARTIAL** | Pinned Community snapshot from clean SSI ancestry, known restricted subtree exclusion, retained MIT copyright and history/source guard | Legal provenance and third-party artifacts; stale PR/cache retention; DB rehearsal; main not yet carrying application |
-| Phase 01 · Rebrand and core | **PARTIAL** | SSI package name, SVG wordmark, manifest, targeted builder types/build and migration-snapshot drift | 6 original ChatbotX favicon asset blobs, internal namespaces, links/locales/Terms/Privacy, real PostgreSQL upgrade/rollback and staging login/worker smoke |
-| Phase 02 · Inbox and channel contracts | **PARTIAL** | Outbound source labels, loaded bot activity, indefinite Human Only and cross-tab/CAS tests | P2.3 durable AI/flow provenance; P2.4 three-state server send gate; P2.5 approval queue; P2.6 source/tool trace API; verified platform fixtures/E2E/security/rollback |
+| Phase 01 · Rebrand and core | **PARTIAL** | SSI package name, SVG wordmark, manifest, targeted builder types/build and migration-snapshot drift | six SSI favicon assets replaced and SHA-regression-guarded (build/staging acceptance still pending), internal namespaces, links/locales/Terms/Privacy, real PostgreSQL upgrade/rollback and staging login/worker smoke |
+| Phase 02 · Inbox and channel contracts | **PARTIAL** | Outbound source labels, loaded bot activity, indefinite Human Only, versioned server-side three-mode control and fresh DB pre-dispatch guard | P2.3 verified AI/flow provenance; P2.4 final atomic claims + every dispatcher/race; P2.5 approval/outbox; P2.6 trace API; provider E2E/security/rollback |
 
 ## Genuine CI results for the last fully checked application baseline
 
@@ -27,8 +27,12 @@ These checks do **not** establish production PostgreSQL data preservation, live 
 ## Remaining work and merge rules
 
 1. **P0 legal/history** — [issue #4](https://github.com/krisfromsg-afk/Super-Social-Intelligence/issues/4). Preserve MIT notice; never erase the license to relicense restricted code.
-2. **P1 runtime and rebrand** — replace/retire old icons after reference check; finish public branding; validate PostgreSQL migrations, real env, session, deployment and worker.
+2. **P1 runtime and rebrand** — maintain new icon regression tests and finish public branding; validate PostgreSQL migrations, real env, session, deployment and worker.
 3. **P2 agent and channel behavior** — complete [issue #3](https://github.com/krisfromsg-afk/Super-Social-Intelligence/issues/3), especially P2.3–P2.9, with real integration tests and human-approval invariants.
 4. **No code merge / DONE declaration** for full application PR #5 until its scope clears legal, database, security and product acceptance. Passing Foundation CI alone is insufficient.
 
 Phases 03 Personality Studio and 04 Knowledge Hub are planned SSI features; they are not equivalent to preexisting ChatbotX Community agents/files/Google Sheets primitives.
+
+## 2026-10-11 incremental P2.4 checkpoint
+
+The clean draft branch now includes `conversationService.setSsiAiMode` (workspace-scoped version/CAS, `botEnabled` and version updated in one SQL statement), three Inbox mode choices, and last-mile bot send gates in two shared provider dispatch paths. **A pre-send check is not an atomic send lease**: handover can race with an in-flight channel API call, and live tenant and channel E2E remain unproven. Copilot is send-disabled, not yet a functional approval queue. Keep draft PR #5 unmerged until all hard gates pass. See [implementation boundary](AI_OWNERSHIP_IMPLEMENTATION.md) and [Phase 3 plan](PHASE03_PERSONALITY_STUDIO_PLAN.md).

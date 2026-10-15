@@ -1,0 +1,25 @@
+import { strict as assert } from "node:assert"
+import { readFileSync } from "node:fs"
+import { test } from "node:test"
+const root = new URL("../../../", import.meta.url)
+const read = (path) => readFileSync(new URL(path, root), "utf8")
+test("channel synchronization delegates to an atomic tenant-scoped field merge", () => {
+  const service = read("packages/business/src/conversation/service.ts")
+  const start = service.indexOf("  private async syncChannelConversationId(")
+  assert.notEqual(start, -1)
+  const end = service.indexOf("  async findOrCreate(", start)
+  assert.ok(end > start)
+  const method = service.slice(start, end)
+  assert.match(service, /import \{ mergeChannelConversationId \} from "\.\/channel-conversation-id"/)
+  assert.match(method, /await mergeChannelConversationId\(/)
+  assert.match(method, /workspaceId: conversation\.workspaceId/)
+  assert.match(method, /conversationId: conversation\.id/)
+  assert.doesNotMatch(method, /\.\.\.conversation\.additionalAttributes/)
+  assert.doesNotMatch(method, /\.set\(/)
+  const helper = read("packages/business/src/conversation/channel-conversation-id.ts")
+  assert.match(helper, /jsonb_set\(/)
+  assert.match(helper, /COALESCE\(\$\{conversationModel\.additionalAttributes\}/)
+  assert.match(helper, /eq\(conversationModel\.workspaceId, workspaceId\)/)
+  assert.match(helper, /eq\(conversationModel\.id, conversationId\)/)
+  assert.doesNotMatch(helper, /sql\.raw/)
+})

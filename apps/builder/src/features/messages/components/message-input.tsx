@@ -1,0 +1,639 @@
+"use client"
+
+import type { ChannelType } from "@chatbotx.io/database/partials"
+import { Button } from "@chatbotx.io/ui/components/ui/button"
+import { Form } from "@chatbotx.io/ui/components/ui/form"
+import { Textarea } from "@chatbotx.io/ui/components/ui/textarea"
+import { createId } from "@chatbotx.io/utils"
+import { zodResolver } from "@hookform/resolvers/zod"
+import { useHookFormAction } from "@next-safe-action/adapter-react-hook-form/hooks"
+import {
+  HandIcon,
+  ImageIcon,
+  LockIcon,
+  PaperclipIcon,
+  ReplyIcon,
+  SendHorizonalIcon,
+  XIcon,
+} from "lucide-react"
+import { useTranslations } from "next-intl"
+import { useAction } from "next-safe-action/hooks"
+import {
+  type KeyboardEvent,
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+} from "react"
+import { Controller, useWatch } from "react-hook-form"
+import { toast } from "sonner"
+import { disableBotAction } from "@/features/conversations/actions/disable-bot.action"
+import { useThreadControl } from "@/features/conversations/hooks/use-thread-control"
+import {
+  BOT_DISABLE_DURATION_MS,
+  isConversationActive,
+} from "@/features/conversations/utils/bot-state"
+import { InboxIcon } from "@/features/inboxes/components/inbox-icon"
+import { MediaLibraryTrigger } from "@/features/media-library/components/media-library-trigger"
+import type { ListFilesResponse } from "@/features/media-library/schema"
+import { QuickRepliesPopover } from "@/features/saved-replies/quick-replies-popover"
+import { authClient } from "@/lib/auth/auth-client"
+import { useChatStore } from "../../chat/store/chat-store-provider"
+import { createMessageAction } from "../actions/create-message.action"
+import { createMessageWithRoutingBypassRequest } from "../schema/mutation"
+import type { MessageResource } from "../schema/resource"
+import { FileUploadPreview } from "./file-upload"
+import { InputMenu } from "./input-menu"
+import { MediaFilePreview } from "./media-file-preview"
+import { ThreadControlLockedComposer } from "./thread-control-locked-composer"
+
+const CHANNEL_WINDOW_SECONDS: Record<ChannelType, number> = {
+  api: 0,
+  omnichannel: 0,
+  webchat: 0,
+  messenger: 24 * 60 * 60,
+  whatsapp: 24 * 60 * 60,
+  zalo: 0,
+  smtp: 0,
+  telegram: 0,
+  instagram: 24 * 60 * 60,
+  threads: 0,
+  tiktok: 24 * 60 * 60,
+}
+
+const MESSENGER_HUMAN_AGENT_WINDOW_SECONDS = 7 * 24 * 60 * 60
+
+// Media Library selection metadata kept for preview purposes only. The form
+// field only carries `mediaFileIds` (the DB ids sent to the server) — the
+// action submits the resolver-parsed form values directly, so display-only
+// fields like url/name can't live on the form.
+type SelectedMediaFile = Pick<
+  ListFilesResponse["data"][number],
+  "id" | "url" | "mimeType" | "name"
+>
+
+export const MessageInput = () => {
+  const t = useTranslations()
+  const session = authClient.useSession()
+
+  const textareaRef = useRef<HTMLTextAreaElement>(null)
+  const fileUploadRef = useRef<HTMLInputElement>(null)
+  const [selectedMediaFiles, setSelectedMediaFiles] = useState<
+    SelectedMediaFile[]
+  >([])
+
+  const {
+    appendMessage,
+    updateConversationViaMessage,
+    activeConversationId,
+    conversations,
+    updateConversation,
+    replyToMessage,
+    setReplyToMessage,
+    isPrivateReply,
+    messages,
+  } = useChatStore((state) => state)
+
+  const lastContactComment = useMemo(() => {
+    for (let i = messages.length - 1; i >= 0; i--) {
+      const m = messages[i]
+      if (
+        m.messageType === "incoming" &&
+        m.type === "comment" &&
+        m.deletedAt == null &&
+        m.id
+      ) {
+        return m
+      }
+    }
+    return null
+  }, [messages])
+
+  // Memoize active conversation to prevent unnecessary re-renders
+  const conversation = useMemo(
+    () => conversations.find((c) => c.id === activeConversationId) ?? null,
+    [conversations, activeConversationId],
+  )
+
+  const channel = conversation?.contactInboxes[0]?.channel
+  const threadControl = useThreadControl(conversation, channel)
+
+  // The agent dismissed the standby lock (stored routing state may be stale):
+  // the next send bypasses the worker's thread-control gate.
+  const [routingLockDismissed, setRoutingLockDismissed] = useState(false)
+  // biome-ignore lint/correctness/useExhaustiveDependencies: reset only on conversation switch
+  useEffect(() => {
+    setRoutingLockDismissed(false)
+  }, [activeConversationId])
+  const isThreadLocked = Boolean(threadControl?.isLocked)
+  // BizAI (Meta AI) standby on an inline-reply channel (Messenger): once the
+  // agent reveals the composer, a reply goes out tagged HUMAN_AGENT (no
+  // handover take). Drives the highlighted notice + the send-gate bypass.
+  const takeOverOnSend = Boolean(threadControl?.inlineReplyTakesOver)
+
+  const { execute: disableBot } = useAction(
+    disableBotAction.bind(null, conversation?.workspaceId ?? ""),
+    {
+      onSuccess: () => {
+        if (conversation) {
+          updateConversation(conversation.id, {
+            botEnabled: false,
+            botResumeAt: new Date(Date.now() + BOT_DISABLE_DURATION_MS),
+          })
+        }
+      },
+      onError: ({ error }) => {
+        if (error.serverError) {
+          toast.error(error.serverError)
+        }
+      },
+    },
+  )
+
+  const { form, handleSubmitWithAction, resetFormAndAction } =
+    useHookFormAction(
+      createMessageAction.bind(
+        null,
+        conversation?.workspaceId ?? "",
+        conversation?.id ?? "",
+      ),
+      zodResolver(createMessageWithRoutingBypassRequest),
+      {
+        actionProps: {
+          onExecute: ({ input }: { input: unknown }) => {
+            // try to push raw message to store — skipped for a private
+            // reply, since that message belongs to the contact's DM
+            // conversation, not whichever post/comment conversation is
+            // currently open here.
+            if (
+              typeof input === "object" &&
+              input !== null &&
+              "text" in input &&
+              input.text &&
+              !(
+                "isPrivateReply" in input &&
+                (input as { isPrivateReply?: boolean }).isPrivateReply
+              )
+            ) {
+              const typedInput = input as { text: string; clientId: string }
+              const optimisticMessage: MessageResource = {
+                text: typedInput.text,
+                id: createId(),
+                createdAt: new Date(),
+                updatedAt: new Date(),
+                workspaceId: conversation?.workspaceId ?? "",
+                sourceId: null,
+                contactInboxId: "",
+                conversationId: conversation?.id ?? "",
+                contentAttributes: null,
+                messageType: "outgoing",
+                contentType: "text",
+                senderType: "user",
+                senderId: session?.data?.user.id ?? null,
+                clientId: typedInput.clientId,
+                deletedAt: null,
+                type: "message",
+                parentId: null,
+                attributes: null,
+                sendError: null,
+              }
+              appendMessage(optimisticMessage)
+              updateConversationViaMessage(optimisticMessage)
+            }
+
+            form.reset()
+            setSelectedMediaFiles([])
+            textareaRef.current?.focus()
+          },
+          onSuccess: () => {
+            if (conversation && isConversationActive(conversation)) {
+              disableBot({ ids: [conversation.id] })
+            }
+            setReplyToMessage(null)
+            textareaRef.current?.focus()
+            resetFormAndAction()
+            setSelectedMediaFiles([])
+            form.setValue("clientId", createId())
+          },
+        },
+        formProps: {
+          defaultValues: {
+            text: "",
+            files: [],
+            mediaFileIds: undefined,
+            clientId: createId(),
+            replyToMessageId: undefined,
+            replyToMessageCreatedAt: undefined,
+            isPrivateReply: undefined,
+          },
+        },
+        errorMapProps: {},
+      },
+    )
+
+  // Sync replyToMessage store state → form field and focus input
+  useEffect(() => {
+    form.setValue("replyToMessageId", replyToMessage?.id ?? undefined)
+    form.setValue(
+      "replyToMessageCreatedAt",
+      replyToMessage?.createdAt ?? undefined,
+    )
+    form.setValue("isPrivateReply", replyToMessage ? isPrivateReply : undefined)
+    if (replyToMessage) {
+      textareaRef.current?.focus()
+    }
+  }, [form, replyToMessage, isPrivateReply])
+
+  // Memoize emoji selection handler
+  const setContent = useCallback(
+    (value: string, insert = false) => {
+      const element = textareaRef.current
+      if (!element) {
+        return
+      }
+
+      if (!insert) {
+        form.setValue("text", value, {
+          shouldValidate: true,
+        })
+        return
+      }
+
+      const text = element.value
+      const before = text.slice(0, element.selectionStart)
+      const after = text.slice(element.selectionStart)
+
+      form.setValue("text", `${before}${value}${after}`, {
+        shouldValidate: true,
+      })
+    },
+    [form],
+  )
+
+  // Memoize attachment click handler
+  const onClickAttachment = useCallback(() => {
+    if (fileUploadRef.current) {
+      // biome-ignore lint/suspicious/noExplicitAny: wip
+      ;(fileUploadRef.current as any).openFileDialog() // Trigger the file dialog
+    }
+  }, [])
+
+  const sendMessage = useCallback(() => {
+    if (!replyToMessage && lastContactComment) {
+      form.setValue("replyToMessageId", lastContactComment.id)
+      form.setValue(
+        "replyToMessageCreatedAt",
+        lastContactComment.createdAt ?? undefined,
+      )
+    }
+    // BizAI (Meta AI) is NOT a Handover Protocol owner, so there is no
+    // `take_thread_control` to call (it would fail with "routing not enabled").
+    // The human agent just replies with the HUMAN_AGENT tag: bypass our local
+    // send gate, and the channel tags the send from this same metadata flag.
+    const bypassThreadControlLock =
+      takeOverOnSend || (routingLockDismissed && isThreadLocked)
+        ? true
+        : undefined
+    form.setValue("bypassThreadControlLock", bypassThreadControlLock)
+    handleSubmitWithAction()
+  }, [
+    replyToMessage,
+    lastContactComment,
+    form,
+    handleSubmitWithAction,
+    routingLockDismissed,
+    isThreadLocked,
+    takeOverOnSend,
+  ])
+
+  // Memoize keyboard handler
+  const onKeyDown = useCallback(
+    (e: KeyboardEvent) => {
+      if (e.nativeEvent.isComposing || e.key === "Process") {
+        return
+      }
+      if (e.key === "Enter" && e.shiftKey === false) {
+        e.preventDefault()
+        sendMessage()
+      }
+    },
+    [sendMessage],
+  )
+
+  const isInstagramPostComment =
+    conversation?.contactInboxes[0]?.channel === "instagram" &&
+    conversation?.sourceId != null
+
+  // Meta DM = messenger or instagram that is NOT a post comment.
+  // sourceId != null on the conversation means it's a post comment for both channels.
+  const isMetaDm =
+    (channel === "messenger" || channel === "instagram") &&
+    conversation?.sourceId == null
+
+  // Parse lastIncomingMessageAt into a numeric timestamp once. Using a scalar
+  // as a memo dependency is more stable than the whole contactInboxes array.
+  // Returns null if the field is absent or not a valid date (NaN guard).
+  const lastIncomingTs = useMemo(() => {
+    const raw = conversation?.contactInboxes[0]?.lastIncomingMessageAt
+    if (!raw) {
+      return null
+    }
+    const ts = new Date(raw).getTime()
+    return Number.isFinite(ts) ? ts : null
+  }, [conversation?.contactInboxes])
+
+  // clockTick is a counter that exists solely to invalidate the window-expiry
+  // memos below. Because Date.now() is called inside useMemo and captured at
+  // render time, the memos would never detect expiry on their own. We schedule
+  // a single setTimeout to fire at the next window boundary; when it fires,
+  // clockTick increments, causing the memos to recompute with the current time.
+  const [clockTick, setClockTick] = useState(0)
+
+  // biome-ignore lint/correctness/useExhaustiveDependencies: clockTick is the invalidation trigger
+  useEffect(() => {
+    if (!(lastIncomingTs && channel)) {
+      return
+    }
+    // Collect all upcoming window boundaries for this channel/contact pair.
+    const windowSeconds = CHANNEL_WINDOW_SECONDS[channel as ChannelType]
+    const deadlines: number[] = []
+    if (windowSeconds) {
+      deadlines.push(lastIncomingTs + windowSeconds * 1000)
+    }
+    if (isMetaDm) {
+      deadlines.push(
+        lastIncomingTs + MESSENGER_HUMAN_AGENT_WINDOW_SECONDS * 1000,
+      )
+    }
+    // Schedule a timeout for the nearest future boundary. When it fires,
+    // clockTick increments and the effect re-runs to schedule the next one.
+    const next = deadlines.filter((d) => d > Date.now()).sort()[0]
+    if (!next) {
+      return
+    }
+    const timeout = setTimeout(
+      () => setClockTick((t) => t + 1),
+      next - Date.now(),
+    )
+    return () => clearTimeout(timeout)
+  }, [lastIncomingTs, channel, isMetaDm, clockTick])
+
+  // biome-ignore lint/correctness/useExhaustiveDependencies: clockTick forces recompute at window boundary
+  const isWindowExpired = useMemo(() => {
+    if (!(lastIncomingTs && channel)) {
+      return false
+    }
+    const windowSeconds = CHANNEL_WINDOW_SECONDS[channel as ChannelType]
+    if (!windowSeconds) {
+      return false
+    }
+    return Date.now() - lastIncomingTs > windowSeconds * 1000
+  }, [channel, lastIncomingTs, clockTick])
+
+  // biome-ignore lint/correctness/useExhaustiveDependencies: clockTick forces recompute at window boundary
+  const isMessengerHumanAgentWindowExpired = useMemo(() => {
+    if (!(isMetaDm && lastIncomingTs)) {
+      return false
+    }
+    return (
+      Date.now() - lastIncomingTs > MESSENGER_HUMAN_AGENT_WINDOW_SECONDS * 1000
+    )
+  }, [isMetaDm, lastIncomingTs, clockTick])
+
+  const isDirectChannelWindowClosed = useMemo(
+    () => (channel === "whatsapp" || channel === "tiktok") && isWindowExpired,
+    [channel, isWindowExpired],
+  )
+
+  // Check if a media file (device upload or Media Library pick) is attached
+  const files = useWatch({
+    control: form.control,
+    name: "files",
+  })
+  const hasFiles =
+    selectedMediaFiles.length > 0 || (Array.isArray(files) && files.length > 0)
+
+  // Early return if no active conversation
+  if (!activeConversationId) {
+    return null
+  }
+
+  // Another responder owns the WhatsApp thread: replies are paused until an
+  // explicit take-over. Placed before the window-closed branches and after
+  // every hook, so the form (and its draft) survives the lock.
+  if (conversation && threadControl?.isLocked && !routingLockDismissed) {
+    return (
+      <ThreadControlLockedComposer
+        channel={threadControl.channel}
+        contactInboxId={threadControl.contactInboxId}
+        conversationId={conversation.id}
+        // Keyed per conversation so a take-over spinner or inline refusal
+        // never carries over when the agent switches conversations.
+        key={conversation.id}
+        onDismiss={() => setRoutingLockDismissed(true)}
+        // BizAI: "Take over" reveals the composer; the real take is on send.
+        revealOnTakeOver={takeOverOnSend}
+        workspaceId={conversation.workspaceId}
+      />
+    )
+  }
+
+  if (isMessengerHumanAgentWindowExpired) {
+    return (
+      <div className="m-3 shrink-0 rounded-xl border pt-2">
+        <div className="flex flex-col items-center justify-center gap-3 px-4 py-6 text-center">
+          <p className="text-muted-foreground text-sm">
+            {t("messages.humanAgentWindowExpired")}
+          </p>
+        </div>
+      </div>
+    )
+  }
+
+  if (isDirectChannelWindowClosed) {
+    return (
+      <div className="m-3 shrink-0 rounded-xl border pt-2">
+        <div className="flex flex-col items-center justify-center gap-3 px-4 py-6 text-center">
+          <p className="text-muted-foreground text-sm">
+            {t("messages.messagingWindowClosed")}
+          </p>
+        </div>
+      </div>
+    )
+  }
+
+  return (
+    <div className="m-3 shrink-0 rounded-xl border pt-2">
+      <Form {...form}>
+        <form
+          aria-label="Message input form"
+          className="flex w-full flex-col"
+          onSubmit={(e) => {
+            e.preventDefault()
+            sendMessage()
+          }}
+        >
+          {takeOverOnSend && (
+            <p className="mx-2.5 mb-1 flex items-center gap-2 rounded-md border border-primary/40 bg-primary/10 px-3 py-1.5 font-semibold text-primary text-sm">
+              <HandIcon aria-hidden className="size-4 shrink-0" />
+              {t("conversationRouting.composer.aiStandbyHint")}
+            </p>
+          )}
+          {replyToMessage && (
+            <div className="mx-2.5 mb-1 flex items-start gap-2 rounded-lg border-primary bg-muted px-3 py-2 text-sm">
+              {isPrivateReply ? (
+                <LockIcon className="mt-0.5 size-3.5 shrink-0 text-primary" />
+              ) : (
+                <ReplyIcon className="mt-0.5 size-3.5 shrink-0 text-primary" />
+              )}
+              <span className="flex-1 truncate text-muted-foreground">
+                {isPrivateReply && (
+                  <span className="me-1 font-medium text-foreground">
+                    {t("messages.privateReply")}:
+                  </span>
+                )}
+                {replyToMessage.text || t("messages.facebookComment")}
+              </span>
+              <Button
+                aria-label="Clear reply"
+                className="size-4 shrink-0 p-0"
+                onClick={() => setReplyToMessage(null)}
+                size="sm"
+                type="button"
+                variant="ghost"
+              >
+                <XIcon className="size-4" />
+              </Button>
+            </div>
+          )}
+          <div className="mb-1 w-full px-2.5 py-1">
+            <Controller
+              control={form.control}
+              name="text"
+              render={({ field }) => (
+                <QuickRepliesPopover
+                  inputValue={field.value ?? ""}
+                  onSelect={setContent}
+                >
+                  <Textarea
+                    aria-label={t("actions.typeMessage")}
+                    autoComplete="off"
+                    className="h-16 resize-none border-0 px-1.5 py-1 shadow-none focus:ring-0 focus-visible:ring-0 dark:bg-neutral-900"
+                    placeholder={t("actions.messagePlaceholder")}
+                    {...field}
+                    onKeyDown={onKeyDown}
+                    ref={textareaRef}
+                  />
+                </QuickRepliesPopover>
+              )}
+            />
+          </div>
+          {!isInstagramPostComment && (
+            <div className="px-2">
+              <FileUploadPreview ref={fileUploadRef} />
+              {selectedMediaFiles.length > 0 && (
+                <div className="flex flex-wrap gap-2">
+                  {selectedMediaFiles.map((mediaFile) => (
+                    <MediaFilePreview
+                      key={mediaFile.id}
+                      mediaFile={mediaFile}
+                      onRemove={() => {
+                        setSelectedMediaFiles((current) => {
+                          const next = current.filter(
+                            (f) => f.id !== mediaFile.id,
+                          )
+                          if (next.length > 0) {
+                            form.setValue(
+                              "mediaFileIds",
+                              next.map((f) => f.id),
+                              { shouldValidate: true },
+                            )
+                          } else {
+                            form.resetField("mediaFileIds")
+                          }
+                          return next
+                        })
+                      }}
+                    />
+                  ))}
+                </div>
+              )}
+            </div>
+          )}
+          <div className="scrollbar-hide flex w-full items-center gap-2 overflow-x-auto ps-2.5">
+            <div className="min-w-0 flex-1">
+              <InboxIcon
+                channel={
+                  (conversation?.contactInboxes[0]?.channel ??
+                    "webchat") as ChannelType
+                }
+              />
+            </div>
+
+            <div className="message-toolbar flex shrink-0 items-center gap-2">
+              {!hasFiles && <InputMenu setContent={setContent} />}
+              {!isInstagramPostComment && (
+                <>
+                  <Button
+                    aria-label="Attach file"
+                    className="px-2 py-1.5 [&_svg]:size-5"
+                    disabled={selectedMediaFiles.length > 0}
+                    onClick={onClickAttachment}
+                    type="button"
+                    variant="ghost"
+                  >
+                    <PaperclipIcon aria-hidden="true" />
+                  </Button>
+                  <MediaLibraryTrigger
+                    multiple={true}
+                    onSelect={(file) => {
+                      setSelectedMediaFiles([file])
+                      form.setValue("mediaFileIds", [file.id], {
+                        shouldValidate: true,
+                      })
+                    }}
+                    onSelectMultiple={(pickedFiles) => {
+                      setSelectedMediaFiles(pickedFiles)
+                      form.setValue(
+                        "mediaFileIds",
+                        pickedFiles.map((file) => file.id),
+                        { shouldValidate: true },
+                      )
+                    }}
+                    workspaceId={conversation?.workspaceId ?? ""}
+                  >
+                    <Button
+                      aria-label={t("mediaLibrary.openMediaLibrary")}
+                      className="px-2 py-1.5 [&_svg]:size-5"
+                      disabled={Array.isArray(files) && files.length > 0}
+                      type="button"
+                      variant="ghost"
+                    >
+                      <ImageIcon aria-hidden="true" />
+                    </Button>
+                  </MediaLibraryTrigger>
+                </>
+              )}
+              <Button
+                aria-label="Send message"
+                className="px-2 py-1.5 [&_svg]:size-5"
+                disabled={
+                  !form.formState.isValid || form.formState.isSubmitting
+                }
+                type="submit"
+                variant="ghost"
+              >
+                <SendHorizonalIcon
+                  aria-hidden="true"
+                  height="32px"
+                  width="32px"
+                />
+              </Button>
+            </div>
+          </div>
+        </form>
+      </Form>
+    </div>
+  )
+}

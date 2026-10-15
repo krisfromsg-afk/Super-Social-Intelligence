@@ -1,0 +1,78 @@
+name: SSI Schema Candidate (No Database)
+on:
+  workflow_dispatch:
+  push:
+    branches: [feat/ssi-clean-history-rebuild]
+    paths: [.github/workflows/ssi-schema-candidate.yml]
+permissions:
+  contents: read
+jobs:
+  generate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm ssi:bootstrap
+      - name: Generate reviewed additive SSI tables without accessing a database
+        run: pnpm --filter @chatbotx.io/database exec drizzle-kit generate --name=ssi_ai_evidence
+      - name: Verify exact reviewed SQL (including non-destructive FK cascade declarations)
+        run: |
+          node <<'NODE'
+          const fs = require('node:fs');
+          const path = require('node:path');
+          const {createHash} = require('node:crypto');
+          const root = 'packages/database/drizzle';
+          const dirs = fs.readdirSync(root).filter(n => n.endsWith('_ssi_ai_evidence'));
+          if (dirs.length !== 1) throw new Error('Expected one SSI evidence migration');
+          const sql = fs.readFileSync(path.join(root, dirs[0], 'migration.sql'));
+          // Exact digest of inspected six-table additive SQL from run 38773880835.
+          // A keyword search for DELETE incorrectly rejected ON DELETE CASCADE
+          // on the new tables. Exact-byte approval is stricter than that search.
+          if (createHash('sha256').update(sql).digest('hex') !== '6ab00847a709f14f090332f3cc478a84d72ff7cb13c0340330fa78ce2aacdd1c') throw new Error('SQL differs from reviewed additive migration');
+          NODE
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ssi-schema-${{ github.sha }}
+          path: packages/database/drizzle/*ssi_ai_evidence/**
+          retention-days: 1
+          if-no-files-found: error
+  record-reviewed-migration:
+    # Records only the generated SQL/snapshot on the development branch.
+    # No database access, production deploy, merge, or bypass of release gates.
+    needs: generate
+    if: github.repository == 'krisfromsg-afk/Super-Social-Intelligence' && github.ref == 'refs/heads/feat/ssi-clean-history-rebuild'
+    permissions:
+      contents: write
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: true
+      - uses: actions/download-artifact@v4
+        with:
+          name: ssi-schema-${{ github.sha }}
+          path: packages/database/drizzle
+      - name: Append generated migration only if the branch has not moved
+        env:
+          SOURCE_SHA: ${{ github.sha }}
+        run: |
+          set -eu
+          branch='feat/ssi-clean-history-rebuild'
+          remote_sha="$(git ls-remote origin "refs/heads/$branch" | cut -f1)"
+          test "$remote_sha" = "$SOURCE_SHA"
+          git add -- packages/database/drizzle/*ssi_ai_evidence/migration.sql packages/database/drizzle/*ssi_ai_evidence/snapshot.json
+          if git diff --cached --quiet; then exit 0; fi
+          git config user.name 'SSI migration generator'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git commit -m 'chore(db): record generated additive SSI evidence migration'
+          git push origin "HEAD:refs/heads/$branch"

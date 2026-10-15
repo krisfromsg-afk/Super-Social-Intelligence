@@ -1,0 +1,25 @@
+"use server"
+
+import { integrationSmtpService, workspaceService } from "@chatbotx.io/business"
+import { zodBigintAsString } from "@chatbotx.io/utils"
+import { workspaceActionClientAllowExpired } from "@/lib/safe-action"
+
+export const deleteSmtpAction = workspaceActionClientAllowExpired
+  .bindArgsSchemas([zodBigintAsString(), zodBigintAsString()])
+  .action(async (props) => {
+    const {
+      bindArgsParsedInputs: [workspaceId, id],
+    } = props
+
+    const [integration, workspace] = await Promise.all([
+      integrationSmtpService.findByIdForWorkspace({ id, workspaceId }),
+      workspaceService.findById({ id: workspaceId }),
+    ])
+
+    await integrationSmtpService.disconnect({
+      workspaceId,
+      id: integration.id,
+      inboxId: integration.inboxId,
+      ownerId: workspace.ownerId,
+    })
+  })

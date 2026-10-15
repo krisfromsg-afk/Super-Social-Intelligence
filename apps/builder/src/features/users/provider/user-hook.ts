@@ -1,0 +1,156 @@
+import type { SelectOption } from "@chatbotx.io/ui/components/form/select-field"
+import type { MultiSelectGroup } from "@chatbotx.io/ui/components/ui/sersavan/multi-select"
+import { useQuery, useQueryClient } from "@tanstack/react-query"
+import { useCallback, useMemo } from "react"
+import { useWorkspaceId } from "@/hooks/routing"
+import { orpc } from "@/lib/orpc/query"
+import { maxPerPage } from "@/lib/shared-request"
+
+export const useWorkspaceMembers = (
+  workspaceId: string | undefined,
+  options?: { enabled?: boolean },
+) =>
+  useQuery(
+    orpc.workspaceMembersAPI.listWorkspaceMembersAuthenticatedAPI.queryOptions({
+      input: { workspaceId: workspaceId ?? "", perPage: maxPerPage },
+      enabled: Boolean(workspaceId) && (options?.enabled ?? true),
+      select: (res) => res.data,
+    }),
+  )
+
+/** Team assignment is unavailable in MIT Community until SSI builds its own. */
+export const useInboxTeams = (
+  _workspaceId: string | undefined,
+  _options?: { enabled?: boolean },
+): {
+  data: Array<{ id: string; name: string }>
+  isPending: boolean
+  isError: boolean
+  error: null
+} => ({
+  data: [],
+  isPending: false,
+  isError: false,
+  error: null,
+})
+
+export const useInvalidateUsers = () => {
+  const queryClient = useQueryClient()
+
+  return useCallback(
+    () =>
+      Promise.all([
+        queryClient.invalidateQueries({
+          queryKey:
+            orpc.workspaceMembersAPI.listWorkspaceMembersAuthenticatedAPI.key(),
+        }),
+      ]),
+    [queryClient],
+  )
+}
+
+type ContactAssigneeOptionsProps = {
+  autoGroup?: boolean
+  includeAll?: boolean
+  includeUnassigned?: boolean
+  enabled?: boolean
+}
+
+const useContactAssigneeOptionsState = (
+  props?: ContactAssigneeOptionsProps,
+) => {
+  const {
+    autoGroup = true,
+    includeAll = false,
+    includeUnassigned = false,
+  } = props || {}
+
+  const workspaceId = useWorkspaceId()
+  const { data: workspaceMembers = [], isPending: isWorkspaceMembersPending } =
+    useWorkspaceMembers(workspaceId, {
+      enabled: props?.enabled,
+    })
+  const { data: inboxTeams = [], isPending: isInboxTeamsPending } =
+    useInboxTeams(workspaceId, {
+      enabled: props?.enabled,
+    })
+  const options = useMemo(() => {
+    const result: SelectOption[] = [
+      {
+        label: "Agents",
+        value: "agents",
+        children: workspaceMembers.map((v) => ({
+          label: v.user?.name ?? "--",
+          value: `u_${v.user?.id}`,
+        })),
+      },
+      {
+        label: "Inbox Teams",
+        value: "inbox-teams",
+        children: inboxTeams.map((v) => ({
+          label: v.name,
+          value: `t_${v.id}`,
+        })),
+      },
+    ]
+
+    if (includeUnassigned) {
+      result.unshift({
+        label: "Unassigned",
+        value: "unassigned",
+      })
+    }
+
+    if (includeAll) {
+      result.unshift({
+        label: "All",
+        value: "all",
+      })
+    }
+    if (autoGroup) {
+      return result
+    }
+
+    return result
+      .flatMap((v) => v.children ?? [])
+      .filter(Boolean) as SelectOption[]
+  }, [workspaceMembers, inboxTeams, autoGroup, includeAll, includeUnassigned])
+
+  return {
+    options,
+    isPending: isWorkspaceMembersPending || isInboxTeamsPending,
+  }
+}
+
+export const useContactAssigneeOptionsWithStatus = (
+  props?: ContactAssigneeOptionsProps,
+) => useContactAssigneeOptionsState(props)
+
+export const useContactAssigneeOptions = (
+  props?: ContactAssigneeOptionsProps,
+) => useContactAssigneeOptionsState(props).options
+
+export const useContactAssigneeMultiSelectOptions = (): MultiSelectGroup[] => {
+  const workspaceId = useWorkspaceId()
+  const { data: workspaceMembers = [] } = useWorkspaceMembers(workspaceId)
+  const { data: inboxTeams = [] } = useInboxTeams(workspaceId)
+  return useMemo(
+    () => [
+      {
+        heading: "Agents",
+        options: workspaceMembers.map((v) => ({
+          label: v.user?.name ?? "--",
+          value: `u_${v.user?.id}`,
+        })),
+      },
+      {
+        heading: "Inbox Teams",
+        options: inboxTeams.map((v) => ({
+          label: v.name,
+          value: `t_${v.id}`,
+        })),
+      },
+    ],
+    [workspaceMembers, inboxTeams],
+  )
+}

@@ -1,0 +1,73 @@
+"use server"
+
+import {
+  invitationService,
+  quotaEnforcementService,
+  workspaceService,
+} from "@chatbotx.io/business"
+import { auditService } from "@chatbotx.io/business/audit"
+import { ChatbotXException } from "@chatbotx.io/business/errors"
+import { isCommunity } from "@/env"
+import { workspaceIdrequestParams } from "@/features/common/schema"
+import { hasWorkspacePermission } from "@/lib/auth/permission-routes"
+import { getCurrentUserAndTargetWorkspace } from "@/lib/auth/utils"
+import { workspaceActionClient } from "@/lib/safe-action"
+import {
+  getSuperAdminPermissions,
+  normalizeContactsPermissions,
+} from "../helpers"
+import { inviteWorkspaceMemberRequest } from "../schema/mutation"
+
+export const inviteWorkspaceMemberAction = workspaceActionClient
+  .bindArgsSchemas(workspaceIdrequestParams)
+  .inputSchema(inviteWorkspaceMemberRequest)
+  .action(async ({ ctx, parsedInput, bindArgsParsedInputs: [workspaceId] }) => {
+    // Read-only gate: team-member usage is reconcile-counted after acceptance,
+    // so block issuing an invitation once the owner is already at the limit.
+    const workspace = await workspaceService.findById({ id: workspaceId })
+    const currentUserAndTargetChatbot =
+      await getCurrentUserAndTargetWorkspace(workspaceId)
+    if (!currentUserAndTargetChatbot) {
+      throw new ChatbotXException(
+        "You are not authorized to invite a workspace member",
+      )
+    }
+
+    const currentPermissions =
+      currentUserAndTargetChatbot.targetWorkspaceMember.permissions
+    if (!hasWorkspacePermission(currentPermissions, "superAdmin")) {
+      throw new ChatbotXException(
+        "You are not authorized to invite a workspace member. You need to be a super admin to do this.",
+      )
+    }
+
+    const atLimit = await quotaEnforcementService.hasReachedLimit({
+      userId: workspace.ownerId,
+      metric: "teamMembers",
+    })
+    if (atLimit) {
+      throw new ChatbotXException(
+        "Team member limit reached for this workspace plan",
+      )
+    }
+
+    const permissions = isCommunity()
+      ? getSuperAdminPermissions()
+      : normalizeContactsPermissions(parsedInput.permissions)
+
+    const invitation = await invitationService.create({
+      workspaceId,
+      invitedBy: ctx.user.id,
+      permissions,
+    })
+
+    // No email/name is captured at invite time (invite is a shareable
+    // code/link, not addressed to a specific person), so the detail can only
+    // name the role being granted.
+    await auditService.record({
+      action: "invite",
+      detail: `invited a new ${permissions.superAdmin ? "admin" : "member"}`,
+    })
+
+    return invitation
+  })

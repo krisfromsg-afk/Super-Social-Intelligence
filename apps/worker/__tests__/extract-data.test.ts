@@ -1,0 +1,161 @@
+import { beforeEach, describe, expect, test, vi } from "vitest"
+
+const mocks = vi.hoisted(() => ({
+  aiFindBy: vi.fn(),
+  logProviderError: vi.fn(async () => undefined),
+  createAIModelInstance: vi.fn(),
+  generateObject: vi.fn(),
+  loggerError: vi.fn(),
+  sendMessageWithRender: vi.fn(),
+  waitForChatJobCompletion: vi.fn(async () => undefined),
+}))
+
+vi.mock("@chatbotx.io/ai", () => ({
+  aiTimeouts: { aiTotal: 30_000 },
+}))
+vi.mock("@chatbotx.io/business/error-log", () => ({
+  logProviderError: mocks.logProviderError,
+}))
+vi.mock("@chatbotx.io/ai/server", () => ({
+  aiIntegrationService: { findBy: mocks.aiFindBy },
+  createAIModelInstance: mocks.createAIModelInstance,
+}))
+vi.mock("@chatbotx.io/database/client", () => ({
+  db: {
+    query: {
+      contactCustomFieldModel: {
+        findFirst: vi.fn(async () => ({ value: "field value" })),
+      },
+    },
+  },
+}))
+vi.mock("@chatbotx.io/variables", () => ({
+  contactVariableService: {
+    getAll: vi.fn(async () => ({})),
+    replaceAll: vi.fn(async ({ text }: { text: string }) => text),
+  },
+}))
+vi.mock("ai", () => ({
+  APICallError: { isInstance: vi.fn(() => false) },
+  generateObject: mocks.generateObject,
+}))
+vi.mock("../src/lib/logger", () => ({
+  logger: { error: mocks.loggerError },
+}))
+vi.mock("../src/integration/utils/contact", () => ({
+  saveResultToCustomField: vi.fn(),
+}))
+vi.mock("../src/integration/utils/message", () => ({
+  sendMessageWithRender: mocks.sendMessageWithRender,
+  waitForChatJobCompletion: mocks.waitForChatJobCompletion,
+}))
+
+const { handleAIExtractData } = await import(
+  "../src/integration/handlers/extract-data/index"
+)
+
+const makeProps = (provider = "openai") =>
+  ({
+    conversation: {
+      id: "conv-1",
+      workspaceId: "ws-1",
+      contactId: "contact-1",
+    },
+    contactInbox: {
+      id: "contact-inbox-1",
+      contactId: "contact-1",
+      sourceId: "psid-1",
+    },
+    step: {
+      id: "step-1",
+      stepType: "aiExtractData",
+      provider,
+      model: "gpt-test",
+      inputType: "text",
+      inputFieldId: "message body",
+      extractFields: [
+        {
+          key: "email",
+          description: "Email",
+          customFieldId: "field-1",
+        },
+      ],
+    },
+  }) as never
+
+describe("handleAIExtractData", () => {
+  beforeEach(() => {
+    vi.clearAllMocks()
+    mocks.aiFindBy.mockResolvedValue({ id: "ai-1" })
+    mocks.createAIModelInstance.mockReturnValue("model")
+    mocks.generateObject.mockRejectedValue(new Error("ai failed"))
+    mocks.sendMessageWithRender.mockResolvedValue({
+      waitUntilFinished: vi.fn(),
+    })
+    mocks.waitForChatJobCompletion.mockResolvedValue(undefined)
+  })
+
+  test("waits for the error message delivery on extraction failure", async () => {
+    const fakeJob = { waitUntilFinished: vi.fn() }
+    let releaseWait!: () => void
+    const waitPromise = new Promise<void>((resolve) => {
+      releaseWait = resolve
+    })
+    mocks.sendMessageWithRender.mockResolvedValueOnce(fakeJob)
+    mocks.waitForChatJobCompletion.mockReturnValueOnce(waitPromise)
+
+    let resolved = false
+    const resultPromise = handleAIExtractData(makeProps()).then((result) => {
+      resolved = true
+      return result
+    })
+
+    await vi.waitFor(() =>
+      expect(mocks.sendMessageWithRender).toHaveBeenCalledWith(
+        "conv-1",
+        "Error extracting data",
+      ),
+    )
+    expect(mocks.waitForChatJobCompletion).toHaveBeenCalledWith(fakeJob, {
+      conversationId: "conv-1",
+    })
+    expect(resolved).toBe(false)
+
+    releaseWait()
+    await expect(resultPromise).resolves.toMatchObject({
+      status: "error",
+      result: null,
+    })
+  })
+
+  test("keeps an automatic broadcast extraction failure in bulk delivery", async () => {
+    const metadata = { type: "broadcast", broadcastId: "broadcast-1" }
+
+    await handleAIExtractData({
+      ...makeProps(),
+      metadata,
+      isBulkBroadcast: true,
+    })
+
+    expect(mocks.sendMessageWithRender).toHaveBeenCalledWith(
+      "conv-1",
+      "Error extracting data",
+      undefined,
+      { metadata, isBulkBroadcast: true },
+    )
+  })
+
+  // The step knows which vendor it ran against; recording every AI failure as
+  // OpenAI is the mis-attribution `ErrorLog` exists to avoid.
+  test("attributes the failure to the vendor the step actually ran against", async () => {
+    await handleAIExtractData(makeProps("claude"))
+
+    expect(mocks.logProviderError).toHaveBeenCalledWith(
+      expect.objectContaining({
+        provider: "claude",
+        workspaceId: "ws-1",
+        contactId: "contact-1",
+      }),
+    )
+  })
+})

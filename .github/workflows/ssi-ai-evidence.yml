@@ -1,0 +1,88 @@
+name: SSI AI Evidence Integration
+on:
+  push:
+    branches: ['feat/ssi-*']
+    paths: ['packages/business/src/ssi-ai/**', 'packages/business/src/conversation/**', 'packages/ai/**', 'packages/database/**', 'apps/builder/src/features/ssi-inbox/**', 'apps/builder/src/features/ssi-ai-governance/**', '.github/workflows/ssi-ai-evidence.yml']
+  pull_request:
+    paths: ['packages/business/src/ssi-ai/**', 'packages/business/src/conversation/**', 'packages/ai/**', 'packages/database/**', 'apps/builder/src/features/ssi-inbox/**', 'apps/builder/src/features/ssi-ai-governance/**', '.github/workflows/ssi-ai-evidence.yml']
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: ssi-ai-evidence-${{ github.event.pull_request.head.ref || github.ref_name }}
+  cancel-in-progress: true
+jobs:
+  evidence:
+    runs-on: ubuntu-latest
+    timeout-minutes: 35
+    services:
+      postgres:
+        image: timescale/timescaledb-ha:pg18-all
+        env:
+          POSTGRES_DB: ssi_ci
+          POSTGRES_USER: ssi_ci
+          POSTGRES_PASSWORD: ssi_ci_disposable_only
+        ports: ['5432:5432']
+        options: >-
+          --health-cmd "pg_isready -U ssi_ci -d ssi_ci"
+          --health-interval 10s --health-timeout 5s --health-retries 15
+    env:
+      CI: 'true'
+      VITEST_MAX_WORKERS: '2'
+      DATABASE_URL: postgresql://ssi_ci:ssi_ci_disposable_only@127.0.0.1:5432/ssi_ci?schema=public
+      DATABASE_DEBUG: 'false'
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm ssi:bootstrap
+      - name: Business type check
+        id: business
+        continue-on-error: true
+        run: pnpm --filter @chatbotx.io/business check-types
+      - name: AI adapter type check
+        id: ai
+        continue-on-error: true
+        run: pnpm --filter @chatbotx.io/ai check-types
+      - name: Policy and review unit tests
+        id: unit
+        continue-on-error: true
+        run: pnpm --filter @chatbotx.io/business exec vitest run src/conversation/__tests__/ssi-copilot-draft-service.test.ts src/conversation/__tests__/ssi-copilot-draft-state.test.ts src/ssi-ai/__tests__/policy.test.ts
+      - name: Verify local disposable target
+        run: |
+          node -e 'const u=new URL(process.env.DATABASE_URL);if(u.hostname!=="127.0.0.1"||u.pathname!=="/ssi_ci")throw Error("Unsafe database target")'
+      - name: Apply and repeat migrations on disposable database only
+        run: |
+          pnpm --filter @chatbotx.io/database db:migrate
+          pnpm --filter @chatbotx.io/database db:migrate
+      - name: Real PostgreSQL service integration (mocked model, no channel calls)
+        id: integration
+        continue-on-error: true
+        env:
+          SSI_AI_DATABASE_TEST: 'true'
+        run: pnpm --filter @chatbotx.io/business exec vitest run src/ssi-ai/__tests__/postgres.integration.test.ts --reporter=default --reporter=json --outputFile=/tmp/ssi-ai-results.json
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: ssi-ai-evidence-${{ github.sha }}
+          path: /tmp/ssi-ai-results.json
+          retention-days: 7
+          if-no-files-found: warn
+      - name: Enforce every collected verdict
+        if: always()
+        env:
+          BUSINESS: ${{ steps.business.outcome }}
+          AI: ${{ steps.ai.outcome }}
+          UNIT: ${{ steps.unit.outcome }}
+          INTEGRATION: ${{ steps.integration.outcome }}
+        run: |
+          test "$BUSINESS" = success
+          test "$AI" = success
+          test "$UNIT" = success
+          test "$INTEGRATION" = success

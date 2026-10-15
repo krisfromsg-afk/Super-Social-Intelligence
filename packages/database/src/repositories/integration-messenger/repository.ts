@@ -1,0 +1,375 @@
+import type { EncryptedData } from "@chatbotx.io/encryption"
+import { and, type DatabaseClient, db, eq, gt, isNull, sql } from "../../client"
+import { inboxStatuses } from "../../partials"
+import { inboxModel, integrationMessengerModel } from "../../schema"
+import type { IntegrationMessengerModel } from "../../types"
+
+type WorkspaceIntegrationRef = {
+  id: string
+  workspaceId: string
+}
+
+type UpdateMessengerCapiScopeCacheInput = WorkspaceIntegrationRef & {
+  hasCapiScope: boolean
+  capiScopeCheckedAt: Date | null
+  expectedCapiScopeCheckedAt: Date | null
+}
+
+type ClaimMessengerCapiScopeCacheRefreshInput = WorkspaceIntegrationRef & {
+  capiScopeCheckedAt: Date
+  expectedCapiScopeCheckedAt: Date | null
+}
+
+type UpdateDatasetIdIfNullInput = WorkspaceIntegrationRef & {
+  datasetId: string
+}
+
+type UpdateCapiTestEventCodeInput = WorkspaceIntegrationRef & {
+  capiTestEventCode: string | null
+}
+
+type UpdateCapiAccessTokenInput = WorkspaceIntegrationRef & {
+  capiAccessToken: EncryptedData
+}
+
+const workspaceIntegrationFilter = (input: WorkspaceIntegrationRef) =>
+  and(
+    eq(integrationMessengerModel.id, input.id),
+    eq(integrationMessengerModel.workspaceId, input.workspaceId),
+  )
+
+const capiScopeCasFilter = (
+  input: WorkspaceIntegrationRef & { expectedCapiScopeCheckedAt: Date | null },
+) =>
+  and(
+    workspaceIntegrationFilter(input),
+    sql`${integrationMessengerModel.capiScopeCheckedAt} IS NOT DISTINCT FROM ${input.expectedCapiScopeCheckedAt}`,
+  )
+
+export const integrationMessengerRepository = {
+  /**
+   * Lists the workspace's connected Messenger Pages — used by the messaging-
+   * ads wizard's WhatsApp step to let the user pick which Page supplies
+   * `promoted_object.page_id` (`IntegrationWhatsapp` has no `pageId` column
+   * of its own; see `packages/business/src/messaging-ads/resolve-channel-
+   * assets.ts`).
+   */
+  listByWorkspaceId(
+    workspaceId: string,
+    tx: DatabaseClient = db,
+  ): Promise<Pick<IntegrationMessengerModel, "id" | "name" | "pageId">[]> {
+    return tx
+      .select({
+        id: integrationMessengerModel.id,
+        name: integrationMessengerModel.name,
+        pageId: integrationMessengerModel.pageId,
+      })
+      .from(integrationMessengerModel)
+      .where(eq(integrationMessengerModel.workspaceId, workspaceId))
+      .orderBy(integrationMessengerModel.createdAt)
+  },
+
+  /**
+   * Projected read for the flow editor's "Set Persona" picker. Selects only
+   * `name` and `personas`, excluding the encrypted auth blob and the
+   * persistent-menu jsonb so a workspace with many connected Pages doesn't
+   * ship those bytes on every flow-editor open.
+   */
+  listPersonasByWorkspaceId(
+    workspaceId: string,
+    tx: DatabaseClient = db,
+  ): Promise<Pick<IntegrationMessengerModel, "name" | "personas">[]> {
+    return tx
+      .select({
+        name: integrationMessengerModel.name,
+        personas: integrationMessengerModel.personas,
+      })
+      .from(integrationMessengerModel)
+      .where(eq(integrationMessengerModel.workspaceId, workspaceId))
+      .orderBy(integrationMessengerModel.createdAt)
+  },
+
+  async findWorkspaceIntegration(
+    input: WorkspaceIntegrationRef,
+    tx: DatabaseClient = db,
+  ): Promise<IntegrationMessengerModel | null> {
+    const [row] = await tx
+      .select()
+      .from(integrationMessengerModel)
+      .where(workspaceIntegrationFilter(input))
+      .limit(1)
+
+    return row ?? null
+  },
+
+  /**
+   * Messenger counterpart to
+   * `integrationWhatsappRepository.findWorkspaceIntegrationByInboxId` (Phase
+   * 3 channel-aware ads-conversion gate call sites): resolves the Messenger
+   * integration that owns a given `Inbox.id`.
+   */
+  async findWorkspaceIntegrationByInboxId(
+    input: { workspaceId: string; inboxId: string },
+    tx: DatabaseClient = db,
+  ): Promise<{ id: string } | null> {
+    const [row] = await tx
+      .select({ id: integrationMessengerModel.id })
+      .from(integrationMessengerModel)
+      .where(
+        and(
+          eq(integrationMessengerModel.inboxId, input.inboxId),
+          eq(integrationMessengerModel.workspaceId, input.workspaceId),
+        ),
+      )
+      .limit(1)
+
+    return row ?? null
+  },
+
+  async updateCapiScopeCache(
+    input: UpdateMessengerCapiScopeCacheInput,
+    tx: DatabaseClient = db,
+  ): Promise<IntegrationMessengerModel | null> {
+    const [row] = await tx
+      .update(integrationMessengerModel)
+      .set({
+        hasCapiScope: input.hasCapiScope,
+        capiScopeCheckedAt: input.capiScopeCheckedAt,
+      })
+      .where(capiScopeCasFilter(input))
+      .returning()
+
+    return row ?? this.findWorkspaceIntegration(input, tx)
+  },
+
+  async claimCapiScopeCacheRefresh(
+    input: ClaimMessengerCapiScopeCacheRefreshInput,
+    tx: DatabaseClient = db,
+  ): Promise<IntegrationMessengerModel | null> {
+    const [row] = await tx
+      .update(integrationMessengerModel)
+      .set({
+        capiScopeCheckedAt: input.capiScopeCheckedAt,
+      })
+      .where(capiScopeCasFilter(input))
+      .returning()
+
+    return row ?? null
+  },
+
+  async updateDatasetIdIfNull(
+    input: UpdateDatasetIdIfNullInput,
+    tx: DatabaseClient = db,
+  ): Promise<IntegrationMessengerModel | null> {
+    const [row] = await tx
+      .update(integrationMessengerModel)
+      .set({ datasetId: input.datasetId })
+      .where(
+        and(
+          workspaceIntegrationFilter(input),
+          isNull(integrationMessengerModel.datasetId),
+        ),
+      )
+      .returning()
+
+    return row ?? null
+  },
+
+  async updateDatasetId(
+    input: UpdateDatasetIdIfNullInput,
+    tx: DatabaseClient = db,
+  ): Promise<IntegrationMessengerModel | null> {
+    const [row] = await tx
+      .update(integrationMessengerModel)
+      .set({ datasetId: input.datasetId })
+      .where(workspaceIntegrationFilter(input))
+      .returning()
+
+    return row ?? null
+  },
+  async updateCapiTestEventCode(
+    input: UpdateCapiTestEventCodeInput,
+    tx: DatabaseClient = db,
+  ): Promise<IntegrationMessengerModel | null> {
+    const [row] = await tx
+      .update(integrationMessengerModel)
+      .set({ capiTestEventCode: input.capiTestEventCode })
+      .where(workspaceIntegrationFilter(input))
+      .returning()
+
+    return row ?? null
+  },
+
+  async updateCapiAccessToken(
+    input: UpdateCapiAccessTokenInput,
+    tx: DatabaseClient = db,
+  ): Promise<IntegrationMessengerModel | null> {
+    const [row] = await tx
+      .update(integrationMessengerModel)
+      .set({ capiAccessToken: input.capiAccessToken })
+      .where(workspaceIntegrationFilter(input))
+      .returning()
+
+    return row ?? null
+  },
+
+  async connectCustomCapi(
+    input: WorkspaceIntegrationRef & {
+      datasetId: string
+      capiAccessToken: EncryptedData
+    },
+    tx: DatabaseClient = db,
+  ): Promise<IntegrationMessengerModel | null> {
+    const [row] = await tx
+      .update(integrationMessengerModel)
+      .set({
+        datasetId: input.datasetId,
+        capiAccessToken: input.capiAccessToken,
+        capiDisconnectedAt: null,
+      })
+      .where(workspaceIntegrationFilter(input))
+      .returning()
+
+    return row ?? null
+  },
+
+  async setCapiDisconnectedAt(
+    input: WorkspaceIntegrationRef & { capiDisconnectedAt: Date },
+    tx: DatabaseClient = db,
+  ): Promise<IntegrationMessengerModel | null> {
+    const [row] = await tx
+      .update(integrationMessengerModel)
+      .set({
+        capiDisconnectedAt: input.capiDisconnectedAt,
+        capiAccessToken: null,
+      })
+      .where(workspaceIntegrationFilter(input))
+      .returning()
+
+    return row ?? null
+  },
+
+  async clearCapiDisconnectedAt(
+    input: WorkspaceIntegrationRef,
+    tx: DatabaseClient = db,
+  ): Promise<IntegrationMessengerModel | null> {
+    const [row] = await tx
+      .update(integrationMessengerModel)
+      .set({ capiDisconnectedAt: null })
+      .where(workspaceIntegrationFilter(input))
+      .returning()
+
+    return row ?? null
+  },
+
+  async clearCapiAccessToken(
+    input: WorkspaceIntegrationRef,
+    tx: DatabaseClient = db,
+  ): Promise<IntegrationMessengerModel | null> {
+    const [row] = await tx
+      .update(integrationMessengerModel)
+      .set({ capiAccessToken: null })
+      .where(workspaceIntegrationFilter(input))
+      .returning()
+
+    return row ?? null
+  },
+
+  /**
+   * Load a Messenger integration by id with NO workspace scope. Callers that
+   * have an id sourced from a workspace-scoped record elsewhere (e.g. a
+   * coexist sync run) must independently compare `workspaceId` themselves —
+   * do not treat this as a substitute for a workspace-scoped lookup.
+   */
+  findById(
+    props: { id: string },
+    tx: DatabaseClient = db,
+  ): Promise<IntegrationMessengerModel | undefined> {
+    return tx.query.integrationMessengerModel.findFirst({
+      where: { id: props.id },
+    })
+  },
+
+  /**
+   * Load a Messenger integration by Facebook page id with NO workspace scope
+   * — used by inbound webhooks (e.g. inbox-label sync) that only have the
+   * page id and have not yet resolved a workspace.
+   */
+  findByPageIdUnscoped(
+    props: { pageId: string },
+    tx: DatabaseClient = db,
+  ): Promise<IntegrationMessengerModel | undefined> {
+    return tx.query.integrationMessengerModel.findFirst({
+      where: { pageId: props.pageId },
+    })
+  },
+
+  /** `sync-tag.ts` attach path: resolve the Messenger integration owning an inbox. */
+  async findByInboxId(
+    input: { inboxId: string },
+    tx: DatabaseClient = db,
+  ): Promise<IntegrationMessengerModel | null> {
+    const row = await tx.query.integrationMessengerModel.findFirst({
+      where: { inboxId: input.inboxId },
+    })
+    return row ?? null
+  },
+
+  /** `sync-tag.ts` create path: every Messenger integration in the workspace, full rows. */
+  async listByWorkspace(
+    input: { workspaceId: string },
+    tx: DatabaseClient = db,
+  ): Promise<IntegrationMessengerModel[]> {
+    return await tx.query.integrationMessengerModel.findMany({
+      where: { workspaceId: input.workspaceId },
+    })
+  },
+
+  /** Sets (or clears) the flow started when a partner hands a conversation back. */
+  async updateHandoverResumeFlow(
+    input: WorkspaceIntegrationRef & { handoverResumeFlowId: string | null },
+    tx: DatabaseClient = db,
+  ): Promise<IntegrationMessengerModel | null> {
+    const [row] = await tx
+      .update(integrationMessengerModel)
+      .set({ handoverResumeFlowId: input.handoverResumeFlowId })
+      .where(workspaceIntegrationFilter(input))
+      .returning()
+
+    return row ?? null
+  },
+
+  /**
+   * One keyset page (ascending id) of Messenger integrations whose inbox is
+   * still connected: the rows a webhook re-subscription may act on (a
+   * disconnected inbox had its subscription removed on purpose). Bounded by
+   * `limit`; pass the last row's id as `afterId` for the next page.
+   */
+  listConnectedForWebhookSubscription(
+    input: { afterId?: string; limit: number },
+    tx: DatabaseClient = db,
+  ) {
+    return tx
+      .select({
+        id: integrationMessengerModel.id,
+        workspaceId: integrationMessengerModel.workspaceId,
+        pageId: integrationMessengerModel.pageId,
+        auth: integrationMessengerModel.auth,
+      })
+      .from(integrationMessengerModel)
+      .innerJoin(
+        inboxModel,
+        eq(inboxModel.id, integrationMessengerModel.inboxId),
+      )
+      .where(
+        and(
+          eq(inboxModel.status, inboxStatuses.enum.connected),
+          input.afterId
+            ? gt(integrationMessengerModel.id, input.afterId)
+            : undefined,
+        ),
+      )
+      .orderBy(integrationMessengerModel.id)
+      .limit(input.limit)
+  },
+}

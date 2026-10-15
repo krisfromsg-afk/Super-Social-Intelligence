@@ -1,0 +1,84 @@
+name: SSI Docker Startup Smoke (Disposable)
+
+on:
+  push:
+    branches: ['feat/ssi-*']
+    paths:
+      - 'docker-compose.yml'
+      - 'docker-compose.dev.yml'
+      - 'apps/builder/docker/**'
+      - 'apps/builder/src/features/auth/**'
+      - 'packages/database/src/seed/**'
+      - '.github/workflows/ssi-docker-smoke.yml'
+  pull_request:
+    paths:
+      - 'docker-compose.yml'
+      - 'docker-compose.dev.yml'
+      - 'apps/builder/docker/**'
+      - 'apps/builder/src/features/auth/**'
+      - 'packages/database/src/seed/**'
+      - '.github/workflows/ssi-docker-smoke.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ssi-${{ github.workflow }}-${{ github.event.pull_request.head.ref || github.ref_name }}
+  cancel-in-progress: true
+
+jobs:
+  disposable-startup:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    env:
+      DOCKER_BUILDKIT: '1'
+      COMPOSE_DOCKER_CLI_BUILD: '1'
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+      - name: Generate unique local-only credentials
+        run: |
+          pnpm ssi:bootstrap
+          test -s .env
+          docker compose -f docker-compose.dev.yml config --quiet
+      - name: Build and start builder with local dependencies
+        run: |
+          docker compose -f docker-compose.dev.yml up -d --build builder filesystem-init
+      - name: Prove application health over HTTP
+        shell: bash
+        run: |
+          set -euo pipefail
+          success=0
+          for i in $(seq 1 45); do
+            if curl --silent --show-error --fail --max-time 5 http://127.0.0.1:3123/api/health >/dev/null; then
+              success=1
+              break
+            fi
+            sleep 8
+          done
+          test "$success" -eq 1
+          docker compose -f docker-compose.dev.yml ps
+      - name: Assert no upstream demo login was seeded
+        shell: bash
+        run: |
+          set -euo pipefail
+          count="$(docker compose -f docker-compose.dev.yml exec -T postgres             sh -ec 'psql -U "$POSTGRES_USER" -d "$POSTGRES_DB" -Atc "select count(*) from \"User\" where email = '\''demo@example.com'\''"'             | tr -d '\r\n')"
+          if [ "$count" != "0" ]; then
+            echo "STOP-SHIP: predictable demo account still exists" >&2
+            exit 1
+          fi
+          echo "No built-in demo login present."
+      - name: Collect diagnostics on failure
+        if: failure()
+        shell: bash
+        run: |
+          docker compose -f docker-compose.dev.yml ps || true
+          # Do not print environment or application secrets to CI logs.
+          docker compose -f docker-compose.dev.yml logs --no-color --tail=120 builder postgres redis filesystem filesystem-init || true
+      - name: Remove disposable containers and volumes
+        if: always()
+        run: docker compose -f docker-compose.dev.yml down -v --remove-orphans || true

@@ -1,0 +1,115 @@
+name: SSI Foundation CI
+
+on:
+  push:
+    branches: [feat/ssi-foundation-rebrand, 'feat/ssi-*']
+    paths:
+      - 'apps/**'
+      - 'packages/**'
+      - 'integrations/**'
+      - 'pnpm-lock.yaml'
+      - 'package.json'
+      - '.github/workflows/ssi-foundation-ci.yml'
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ssi-${{ github.workflow }}-${{ github.event.pull_request.head.ref || github.ref_name }}
+  cancel-in-progress: true
+
+jobs:
+  baseline:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Verify MIT source boundary
+        id: license
+        continue-on-error: true # Collect diagnostics, but fail the job at the final gate.
+        shell: bash
+        run: |
+          test ! -e apps/builder/src/enterprise
+          test ! -e packages/database/src/schema/enterprise
+          test ! -e packages/database/src/relations/enterprise
+          # Audit reachable commit history, not only the checked-out worktree.
+          # Other obsolete repository branches are not part of HEAD ancestry.
+          if git rev-list --objects HEAD | grep -E ' (apps/builder/src/enterprise/|packages/database/src/schema/enterprise/|packages/database/src/relations/enterprise/)'; then
+            echo 'STOP-SHIP: restricted source exists in reachable commit ancestry' >&2
+            exit 1
+          fi
+          if find packages apps integrations -type f -iname 'LICENSE*' -exec grep -l 'ChatbotX Commercial License' {} + | grep -q .; then
+            echo 'STOP-SHIP: unreviewed nested Commercial License (issue #4)' >&2
+            exit 1
+          fi
+          test -f LICENSE
+          grep -q 'Copyright (c) 2024-present AhaChat LLC' LICENSE
+          test -f packages/ai/package.json
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: pnpm
+      - name: Install workspace dependencies
+        run: pnpm install --frozen-lockfile
+      - name: Verify Drizzle schema against migration snapshots
+        id: schema_drift
+        continue-on-error: true
+        run: pnpm --filter @chatbotx.io/database db:check-drift
+      - name: Verify SSI policy links are first-party configured
+        run: pnpm --filter builder exec vitest run src/features/auth/__tests__/legal-policy-links.test.ts
+      - name: Verify SSI favicon raster, vector and PWA metadata
+        run: pnpm --filter builder exec vitest run __tests__/ssi-brand-assets.test.ts
+      - name: Verify SSI sender classification unit tests
+        run: pnpm --filter builder exec vitest run src/features/ssi-inbox/__tests__/message-provenance.test.ts
+      - name: Verify permanent Human Only state
+        run: pnpm --filter builder exec vitest run src/features/ssi-inbox/__tests__/human-only.test.ts
+      - name: Verify cross-tab bot handover events
+        run: pnpm --filter builder exec vitest run src/features/ssi-inbox/__tests__/bot-realtime-patch.test.ts
+      - name: Verify Inbox thread layout regression
+        run: pnpm --filter builder exec vitest run __tests__/message-thread-pane-scroll.test.tsx
+      - name: Verify atomic Human Only takeover
+        run: pnpm --filter @chatbotx.io/business exec vitest run src/conversation/__tests__/conversation.service.test.ts
+      - name: Check types (builder)
+        run: pnpm --filter builder check-types
+      - name: Build builder
+        run: pnpm --filter builder build
+      - name: Validate generated local env and Docker DNS configuration
+        run: |
+          node scripts/ssi/bootstrap-local-env.mjs
+          test -s .env
+          docker compose -f docker-compose.dev.yml config --quiet
+          docker compose -f docker-compose.dev.yml config --format json | node -e '
+            const fs = require("node:fs")
+            const config = JSON.parse(fs.readFileSync(0, "utf8"))
+            for (const service of ["builder", "worker", "realtime"]) {
+              const env = config.services?.[service]?.environment
+              if (!env?.DATABASE_URL?.includes("@postgres:5432/")) throw Error(service + ": database must use Docker DNS")
+              if (env.REDIS_URL !== "redis://redis:6379") throw Error(service + ": Redis must use Docker DNS")
+              if (env.S3_ENDPOINT !== "http://filesystem:9000") throw Error(service + ": storage must use Docker DNS")
+            }
+          '
+          if node scripts/ssi/bootstrap-local-env.mjs; then
+            echo "ERROR: local bootstrap overwrote an existing environment" >&2
+            exit 1
+          fi
+      - name: Verify Compose requires unique secrets and loopback exposure
+        run: node --test scripts/ssi/__tests__/compose-security.test.mjs
+      - name: Guard against shared-password demo seeding
+        run: node --test scripts/ssi/__tests__/seed-safety.test.mjs
+      - name: Reject committed sample credentials
+        run: node --test scripts/ssi/__tests__/env-template-safety.test.mjs
+      - name: Test local config diagnostic
+        run: node --test scripts/ssi/__tests__/doctor.test.mjs
+      - name: Validate local config diagnostic without exposing secrets
+        run: pnpm ssi:doctor
+      - name: Enforce SSI licensing stop-ship
+        if: always()
+        run: |
+          echo "License audit result: ${{ steps.license.outcome }}"
+          echo "Schema drift result: ${{ steps.schema_drift.outcome }}"
+          test "${{ steps.license.outcome }}" = "success"
+          test "${{ steps.schema_drift.outcome }}" = "success"

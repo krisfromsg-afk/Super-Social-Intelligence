@@ -1,0 +1,35 @@
+name: SSI Channel Metadata Repair (Development Only)
+on:
+  push:
+    branches: [feat/ssi-clean-history-rebuild]
+    paths: [.github/workflows/ssi-channel-metadata.yml]
+permissions:
+  contents: read
+jobs:
+  record-exact-repair:
+    if: github.repository == 'krisfromsg-afk/Super-Social-Intelligence' && github.ref == 'refs/heads/feat/ssi-clean-history-rebuild'
+    permissions:
+      contents: write
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+      - name: Apply two reviewed substitutions and verify exact before/after Git blobs
+        run: node scripts/ssi/record-channel-fix.mjs
+      - name: Verify the actual service delegates to a tenant-scoped atomic merge
+        run: node --test scripts/ssi/__tests__/channel-metadata-boundary.test.mjs
+      - name: Record only the reviewed source repair with a fast-forward lease
+        env:
+          SOURCE_SHA: ${{ github.sha }}
+        run: |
+          set -eu
+          branch='feat/ssi-clean-history-rebuild'
+          test "$(git ls-remote origin "refs/heads/$branch" | cut -f1)" = "$SOURCE_SHA"
+          git add -- packages/business/src/conversation/service.ts
+          test "$(git diff --cached --name-only)" = 'packages/business/src/conversation/service.ts'
+          git config user.name 'SSI reviewed source repair'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git commit -m 'fix(ssi): preserve AI ownership and drafts during channel metadata updates'
+          git push origin "HEAD:refs/heads/$branch"

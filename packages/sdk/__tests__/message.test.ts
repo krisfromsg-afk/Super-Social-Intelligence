@@ -1,0 +1,256 @@
+import { describe, expect, test, vi } from "vitest"
+import {
+  getCanonicalReplyPayload,
+  isDistinctPrimaryIdentity,
+  isWhatsappNativeLocationRequest,
+  type MessageButtonTemplate,
+  NATIVE_LOCATION_REQUEST_CHANNELS,
+  resolveMessagingWindowOpenedAt,
+  resolveSourceScopedIdentityMatch,
+  URL_QUICK_REPLY_CAPABLE_CHANNELS,
+  WHATSAPP_NATIVE_LOCATION_REQUEST,
+} from "../src"
+
+describe("isDistinctPrimaryIdentity", () => {
+  test.each([
+    undefined,
+    null,
+    "",
+    "   ",
+  ])("rejects an empty primary identity: %o", (value) => {
+    expect(isDistinctPrimaryIdentity(value, "bsuid-1")).toBe(false)
+  })
+
+  test("compares trimmed primary and scoped identities", () => {
+    expect(isDistinctPrimaryIdentity("  bsuid-1  ", "bsuid-1")).toBe(false)
+    expect(isDistinctPrimaryIdentity("84900000001", " 84900000001 ")).toBe(
+      false,
+    )
+  })
+
+  test("accepts a non-empty primary identity distinct from every scoped identity", () => {
+    expect(
+      isDistinctPrimaryIdentity(
+        " 84900000001 ",
+        undefined,
+        null,
+        "",
+        "bsuid-1",
+      ),
+    ).toBe(true)
+  })
+})
+
+describe("resolveSourceScopedIdentityMatch", () => {
+  test("probes sourceParentUserId only after sourceId and sourceUserId miss", async () => {
+    const lookup = vi
+      .fn()
+      .mockResolvedValueOnce(undefined)
+      .mockResolvedValueOnce(undefined)
+      .mockResolvedValueOnce({ id: "contact-inbox-1" })
+
+    await expect(
+      resolveSourceScopedIdentityMatch(
+        {
+          sourceId: "84900000001",
+          sourceUserId: "bsuid-new",
+          sourceParentUserId: "parent-bsuid",
+        },
+        lookup,
+      ),
+    ).resolves.toEqual({
+      row: { id: "contact-inbox-1" },
+      matchedBy: "sourceParentUserId",
+    })
+    expect(lookup.mock.calls).toEqual([
+      [{ sourceId: "84900000001" }],
+      [{ sourceUserId: "bsuid-new" }],
+      [{ sourceParentUserId: "parent-bsuid" }],
+    ])
+  })
+
+  test("skips the parent probe when sourceParentUserId is absent", async () => {
+    const lookup = vi.fn().mockResolvedValue(undefined)
+
+    await expect(
+      resolveSourceScopedIdentityMatch(
+        { sourceId: "84900000001", sourceUserId: "bsuid-new" },
+        lookup,
+      ),
+    ).resolves.toBeUndefined()
+    expect(lookup).toHaveBeenCalledTimes(2)
+  })
+
+  test("a sourceUserId hit short-circuits the parent probe", async () => {
+    const lookup = vi
+      .fn()
+      .mockResolvedValueOnce(undefined)
+      .mockResolvedValueOnce({ id: "contact-inbox-1" })
+
+    await expect(
+      resolveSourceScopedIdentityMatch(
+        {
+          sourceId: "84900000001",
+          sourceUserId: "bsuid-current",
+          sourceParentUserId: "parent-bsuid",
+        },
+        lookup,
+      ),
+    ).resolves.toEqual({
+      row: { id: "contact-inbox-1" },
+      matchedBy: "sourceUserId",
+    })
+    expect(lookup).toHaveBeenCalledTimes(2)
+  })
+})
+
+describe("getCanonicalReplyPayload", () => {
+  test("returns postback for a postback button", () => {
+    const button: MessageButtonTemplate = {
+      id: "qr-1",
+      label: "Yes",
+      buttonType: "postback",
+      postback: "flow-1::qr-1",
+    }
+
+    expect(getCanonicalReplyPayload(button)).toBe("flow-1::qr-1")
+  })
+
+  test("returns fallback postback for a URL button when present", () => {
+    const button: MessageButtonTemplate = {
+      id: "qr-2",
+      label: "Open",
+      buttonType: "url",
+      url: "https://example.com?code=flow-1::qr-2",
+      postback: "flow-1::qr-2",
+    }
+
+    expect(getCanonicalReplyPayload(button)).toBe("flow-1::qr-2")
+  })
+
+  test("returns URL for a URL button without fallback postback", () => {
+    const button: MessageButtonTemplate = {
+      id: "qr-3",
+      label: "Open",
+      buttonType: "url",
+      url: "https://example.com",
+    }
+
+    expect(getCanonicalReplyPayload(button)).toBe("https://example.com")
+  })
+})
+
+describe("URL_QUICK_REPLY_CAPABLE_CHANNELS", () => {
+  test("lists only the channels verified to render a url quick reply as a real link button", () => {
+    expect(URL_QUICK_REPLY_CAPABLE_CHANNELS.has("messenger")).toBe(true)
+    expect(URL_QUICK_REPLY_CAPABLE_CHANNELS.has("telegram")).toBe(true)
+  })
+
+  test("excludes channels that silently degrade a url quick reply", () => {
+    expect(URL_QUICK_REPLY_CAPABLE_CHANNELS.has("whatsapp")).toBe(false)
+    expect(URL_QUICK_REPLY_CAPABLE_CHANNELS.has("instagram")).toBe(false)
+    expect(URL_QUICK_REPLY_CAPABLE_CHANNELS.has("zalo")).toBe(false)
+    expect(URL_QUICK_REPLY_CAPABLE_CHANNELS.has("tiktok")).toBe(false)
+    expect(URL_QUICK_REPLY_CAPABLE_CHANNELS.has("webchat")).toBe(false)
+  })
+})
+
+describe("NATIVE_LOCATION_REQUEST_CHANNELS", () => {
+  test("lists only WhatsApp, which can send Cloud API location_request_message", () => {
+    expect(NATIVE_LOCATION_REQUEST_CHANNELS.has("whatsapp")).toBe(true)
+  })
+
+  test("excludes channels that cannot render Meta's native Send location button", () => {
+    expect(NATIVE_LOCATION_REQUEST_CHANNELS.has("messenger")).toBe(false)
+    expect(NATIVE_LOCATION_REQUEST_CHANNELS.has("telegram")).toBe(false)
+    expect(NATIVE_LOCATION_REQUEST_CHANNELS.has("webchat")).toBe(false)
+  })
+})
+
+describe("isWhatsappNativeLocationRequest", () => {
+  test("detects the reserved location-request postback", () => {
+    const button: MessageButtonTemplate = {
+      id: WHATSAPP_NATIVE_LOCATION_REQUEST,
+      label: "Send location",
+      buttonType: "postback",
+      postback: WHATSAPP_NATIVE_LOCATION_REQUEST,
+    }
+
+    expect(isWhatsappNativeLocationRequest([button])).toBe(true)
+  })
+
+  test("returns false for ordinary postbacks and missing buttons", () => {
+    const button: MessageButtonTemplate = {
+      id: "qr-1",
+      label: "Yes",
+      buttonType: "postback",
+      postback: "flow-1::qr-1",
+    }
+
+    expect(isWhatsappNativeLocationRequest([button])).toBe(false)
+    expect(isWhatsappNativeLocationRequest(undefined)).toBe(false)
+  })
+})
+
+describe("resolveMessagingWindowOpenedAt", () => {
+  const createdAt = new Date("2026-09-18T10:00:00Z")
+
+  test("a contact's message opens the window when it arrived", () => {
+    expect(
+      resolveMessagingWindowOpenedAt({ messageType: "incoming", createdAt }),
+    ).toEqual(createdAt)
+  })
+
+  test("accepts the string form a realtime payload delivers", () => {
+    expect(
+      resolveMessagingWindowOpenedAt({
+        messageType: "incoming",
+        createdAt: createdAt.toISOString(),
+      }),
+    ).toEqual(createdAt)
+  })
+
+  test("a call card opens it at the moment the server stamped, not when the card was written", () => {
+    const openedAt = "2026-09-18T09:55:00.000Z"
+    expect(
+      resolveMessagingWindowOpenedAt({
+        messageType: "activity",
+        createdAt,
+        contentAttributes: {
+          type: "whatsapp_call",
+          direction: "userInitiated",
+          status: "failed",
+          customerServiceWindowOpenedAt: openedAt,
+        },
+      }),
+    ).toEqual(new Date(openedAt))
+  })
+
+  test("a call card without the stamp opens nothing", () => {
+    expect(
+      resolveMessagingWindowOpenedAt({
+        messageType: "activity",
+        createdAt,
+        contentAttributes: {
+          type: "whatsapp_call",
+          direction: "businessInitiated",
+          status: "failed",
+        },
+      }),
+    ).toBeNull()
+  })
+
+  test.each([
+    ["outgoing", undefined],
+    ["activity", { type: "note" }],
+    ["activity", undefined],
+  ])("a %s message with %o opens nothing", (messageType, contentAttributes) => {
+    expect(
+      resolveMessagingWindowOpenedAt({
+        messageType,
+        createdAt,
+        contentAttributes,
+      }),
+    ).toBeNull()
+  })
+})
