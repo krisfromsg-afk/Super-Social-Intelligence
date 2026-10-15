@@ -1,0 +1,31 @@
+name: SSI Schema Candidate (No Database)
+on:
+  workflow_dispatch:
+  push:
+    branches: [feat/ssi-clean-history-rebuild]
+    paths: [.github/workflows/ssi-schema-candidate.yml]
+permissions:
+  contents: read
+jobs:
+  generate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm ssi:bootstrap
+      - name: Generate candidate SQL and snapshot without applying migrations
+        run: pnpm --filter @chatbotx.io/database exec drizzle-kit generate --name=ssi_ai_evidence
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ssi-schema-${{ github.sha }}
+          path: packages/database/drizzle/*ssi_ai_evidence/**
+          retention-days: 1
+          if-no-files-found: error

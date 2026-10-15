@@ -173,3 +173,5 @@ export * from "./workspace"
 export * from "./workspace-api-token"
 export * from "./workspace-mac"
 export * from "./workspace-member"
+
+export * from "./ssi-ai"
