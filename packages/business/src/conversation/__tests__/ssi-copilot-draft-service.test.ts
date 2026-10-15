@@ -78,6 +78,15 @@ describe("SSI transactional Copilot review (no delivery side effects)", () => {
     await expect(ssiCopilotDraftService.review({ ...shared, expectedDraftVersion: 1, decision: "approve" })).rejects.toThrow("provenance")
     expect(mocks.insert).not.toHaveBeenCalled(); expect(mocks.set).not.toHaveBeenCalled()
   })
+  it("allows an authorized operator to reject a draft whose AI evidence is unavailable, but never approve it", async () => {
+    const ai = { ...pending, origin: "ai", runId: "555" }
+    authorize(conversation(ai))
+    await expect(ssiCopilotDraftService.review({ ...shared, expectedDraftVersion: 1, decision: "approve" })).rejects.toThrow("provenance")
+    expect(mocks.insert).not.toHaveBeenCalled()
+    authorize(conversation(ai))
+    await expect(ssiCopilotDraftService.review({ ...shared, expectedDraftVersion: 1, decision: "reject" })).resolves.toEqual({ version: 2, status: "rejected" })
+    expect(mocks.insert).toHaveBeenCalledWith(expect.objectContaining({ event: "reject", snapshot: expect.objectContaining({ reviewedBy: "789", runId: "555" }) }))
+  })
   it("attributes an edited AI draft to its human editor, preserving lineage but not approval", async () => {
     authorize(conversation({ ...pending, origin: "ai", runId: "555" }))
     const result = await ssiCopilotDraftService.save({ ...shared, expectedDraftVersion: 1, text: "Edited" })

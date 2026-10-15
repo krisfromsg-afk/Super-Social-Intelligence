@@ -85,7 +85,9 @@ export const ssiCopilotDraftService = {
       await assertSsiMember({ ...input, permission: "contacts" }, tx)
       const { conversation, draft } = await lockSsiCopilotConversation(input, tx)
       if (!draft || draft.status !== "pending" || draft.modeVersion !== input.expectedModeVersion) throw new Error("Copilot review lost the race or mode changed; refresh and retry")
-      if (draft.origin === "ai" || draft.derivedFromRunId) {
+      // Revocation blocks approval, not an authorized decision to discard a
+      // now-unusable draft. Rejection still requires membership and both CASes.
+      if (input.decision === "approve" && (draft.origin === "ai" || draft.derivedFromRunId)) {
         const [run] = await tx.select({ outputDigest: ssiAiRunModel.outputDigest, status: ssiAiRunModel.status, sources: ssiAiRunModel.sources }).from(ssiAiRunModel).where(and(
           eq(ssiAiRunModel.workspaceId, input.workspaceId), eq(ssiAiRunModel.conversationId, input.conversationId), eq(ssiAiRunModel.id, (draft.runId ?? draft.derivedFromRunId)!),
         )).limit(1)

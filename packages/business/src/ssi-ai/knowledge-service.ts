@@ -74,8 +74,10 @@ export const ssiKnowledgeService = {
     if (input.fileIds.length > 30 || input.query.length > 8000) throw new Error("Knowledge search exceeds bounds")
     const terms = ssiKnowledgeTerms(input.query)
     if (!input.fileIds.length || !terms.length) return []
-    // All values are parameters. No sql.raw for queries, ids or tenant scope.
-    // 'simple' avoids applying English stemming to Vietnamese content.
+    // Interpolated JS arrays expand into SQL lists in this Drizzle version;
+    // they are not a single PostgreSQL array parameter. Bind each ID explicitly.
+    // No raw SQL, concatenated identifiers, or relaxation of tenant filtering.
+    const selectedFiles = sql.join(input.fileIds.map((id) => sql`${id}`), sql`, `)
     const query = terms.join(" | ")
     const rows = await db.execute<SsiKnowledgeHit>(sql`
       SELECT c."id"::text AS "id", v."fileId"::text AS "fileId", v."version", v."name", c."content", c."digest"
@@ -83,7 +85,7 @@ export const ssiKnowledgeService = {
       JOIN ${ssiKnowledgeVersionModel} v ON v."id" = c."versionId" AND v."workspaceId" = c."workspaceId"
       JOIN ${aiFileModel} f ON f."id" = v."fileId" AND f."workspaceId" = v."workspaceId"
       WHERE c."workspaceId" = ${input.workspaceId}
-        AND v."fileId"::text = ANY(${input.fileIds}::text[])
+        AND v."fileId"::text IN (${selectedFiles})
         AND v."version" = (SELECT MAX(v2."version") FROM ${ssiKnowledgeVersionModel} v2 WHERE v2."workspaceId" = v."workspaceId" AND v2."fileId" = v."fileId")
         AND to_tsvector('simple', c."content") @@ to_tsquery('simple', ${query})
       ORDER BY ts_rank_cd(to_tsvector('simple', c."content"), to_tsquery('simple', ${query})) DESC, c."id"
