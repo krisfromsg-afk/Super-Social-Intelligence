@@ -1,148 +1,107 @@
-import { and, db, eq, sql } from "@chatbotx.io/database/client"
-import { conversationModel } from "@chatbotx.io/database/schema"
-import { readSsiCopilotDraft, type SsiCopilotDraftStatus, validateSsiCopilotDraftInput } from "./ssi-copilot-draft-state"
+import { and, db, desc, eq, type DatabaseClient } from "@chatbotx.io/database/client"
+import { conversationModel, ssiAiRunModel, ssiCopilotRevisionModel } from "@chatbotx.io/database/schema"
+import { assertSsiMember } from "../ssi-ai/access"
+import { ssiKnowledgeService } from "../ssi-ai/knowledge-service"
+import { ssiTextDigest } from "../ssi-ai/policy"
+import { readSsiAiControl } from "./ssi-ai-control"
+import { readSsiCopilotDraft, type SsiCopilotDraft, validateSsiCopilotDraftInput } from "./ssi-copilot-draft-state"
 
-/**
- * Transactional single-row staging only. No message insert, enqueue or send.
- * All writes are workspace-scoped and require the current Copilot mode VERSION,
- * so a switch Copilot -> Human Only -> Copilot invalidates old draft reviews.
- */
-const attr = conversationModel.additionalAttributes
-
-// Build SQL only when a service operation runs. This module is re-exported by
-// the shared business barrel: importing unrelated APIs must not execute SQL or
-// require a live database adapter (including deliberately narrow test mocks).
-function current() {
-  return sql`COALESCE(${attr}, '{}'::jsonb)`
+export type SsiDraftMutation = {
+  workspaceId: string; conversationId: string; actorId: string
+  expectedModeVersion: number; expectedDraftVersion: number
 }
 
-function currentDraft() {
-  return sql`${attr}->'ssiCopilotDraft'`
+/** The row lock is also taken by mode changes, including legacy bot toggles. */
+export async function lockSsiCopilotConversation(input: SsiDraftMutation, tx: DatabaseClient) {
+  validateSsiCopilotDraftInput(input)
+  const [conversation] = await tx.select().from(conversationModel).where(and(
+    eq(conversationModel.workspaceId, input.workspaceId), eq(conversationModel.id, input.conversationId),
+  )).for("update").limit(1)
+  const control = readSsiAiControl(conversation?.additionalAttributes)
+  const draft = readSsiCopilotDraft(conversation?.additionalAttributes)
+  if (!conversation || conversation.botEnabled || !control || control === "invalid" || control.mode !== "copilot" || control.version !== input.expectedModeVersion || draft === "invalid" || (draft?.version ?? 0) !== input.expectedDraftVersion) {
+    throw new Error("Copilot draft or AI mode changed; refresh and retry")
+  }
+  return { conversation, draft }
 }
 
-function copilotModeGuard(expectedModeVersion: number) {
-  return sql`(
-    ${conversationModel.botEnabled} = false
-    AND ${attr}->'ssiAiControl'->>'mode' = 'copilot'
-    AND ${attr}->'ssiAiControl'->>'version' = ${String(expectedModeVersion)}
-  )`
-}
-
-function draftVersionGuard(expectedDraftVersion: number) {
-  // A malformed explicit draft must not be mistaken for an absent one.
-  return sql`(CASE
-    WHEN ${attr} IS NULL THEN 0
-    WHEN jsonb_typeof(${attr}) = 'object' AND NOT (${attr} ? 'ssiCopilotDraft') THEN 0
-    WHEN jsonb_typeof(${currentDraft()}) = 'object'
-      AND jsonb_typeof(${currentDraft()}->'version') = 'number'
-      AND (${currentDraft()}->>'version') ~ '^[1-9][0-9]{0,9}$'
-    THEN (${currentDraft()}->>'version')::bigint
-    ELSE -1
-  END) = ${expectedDraftVersion}`
+export async function persistSsiCopilotRevision(input: SsiDraftMutation, draft: SsiCopilotDraft,
+  event: "operator_save" | "ai_generation" | "approve" | "reject", attributes: Record<string, unknown> | null,
+  tx: DatabaseClient) {
+  await tx.insert(ssiCopilotRevisionModel).values({
+    workspaceId: input.workspaceId, conversationId: input.conversationId, version: draft.version,
+    modeVersion: draft.modeVersion, actorId: input.actorId, event,
+    textDigest: ssiTextDigest(draft.text), snapshot: { ...draft },
+  })
+  await tx.update(conversationModel).set({ additionalAttributes: { ...attributes, ssiCopilotDraft: draft } })
+    .where(and(eq(conversationModel.workspaceId, input.workspaceId), eq(conversationModel.id, input.conversationId)))
+  return draft
 }
 
 export const ssiCopilotDraftService = {
-  async get(props: { workspaceId: string; conversationId: string }) {
+  async get(input: { workspaceId: string; conversationId: string }) {
     const row = await db.query.conversationModel.findFirst({
-      where: { workspaceId: props.workspaceId, id: props.conversationId },
+      where: { workspaceId: input.workspaceId, id: input.conversationId },
       columns: { additionalAttributes: true, botEnabled: true },
     })
     if (!row) throw new Error("Conversation is unavailable")
+    const control = readSsiAiControl(row.additionalAttributes)
+    if (row.botEnabled || !control || control === "invalid" || control.mode !== "copilot") return null
     const draft = readSsiCopilotDraft(row.additionalAttributes)
-    // Staged approval cannot leak across a mode transition.
-    const control = row.additionalAttributes && typeof row.additionalAttributes === "object" && !Array.isArray(row.additionalAttributes)
-      ? (row.additionalAttributes as Record<string, unknown>).ssiAiControl
-      : null
-    const c = control && typeof control === "object" && !Array.isArray(control)
-      ? control as Record<string, unknown> : null
-    if (row.botEnabled || c?.mode !== "copilot" || typeof c?.version !== "number") return null
     if (draft === "invalid") throw new Error("Corrupt Copilot draft; operator repair required")
-    // Return stale drafts for an authorized editor to revise, never to approve.
-    // Review CAS requires the original modeVersion to match the current mode.
-    // Hiding stale drafts made Save's expectedVersion=0 permanently conflict
-    // after Copilot -> Human Only -> Copilot transitions.
     return draft
   },
 
-  async save(props: {
-    workspaceId: string
-    conversationId: string
-    actorId: string
-    expectedModeVersion: number
-    expectedDraftVersion: number
-    text: string
-  }) {
-    validateSsiCopilotDraftInput(props)
-    const draft = {
-      version: props.expectedDraftVersion + 1,
-      modeVersion: props.expectedModeVersion,
-      text: props.text.trim(),
-      origin: "operator" as const,
-      status: "pending" as const,
-      updatedBy: props.actorId,
-      updatedAt: new Date().toISOString(),
-    }
-    // Explicitly operator-authored: never pass user text as verified AI output.
-    const [updated] = await db.update(conversationModel)
-      .set({ additionalAttributes: sql`jsonb_set(${current()}, '{ssiCopilotDraft}', ${JSON.stringify(draft)}::jsonb, true)` })
-      .where(and(
-        eq(conversationModel.id, props.conversationId),
-        eq(conversationModel.workspaceId, props.workspaceId),
-        copilotModeGuard(props.expectedModeVersion),
-        draftVersionGuard(props.expectedDraftVersion),
-      ))
-      .returning({ id: conversationModel.id })
-    if (!updated) throw new Error("Copilot draft or AI mode changed; refresh and retry")
-    return draft
+  async history(input: { workspaceId: string; conversationId: string }) {
+    const rows = await db.select({ version: ssiCopilotRevisionModel.version, modeVersion: ssiCopilotRevisionModel.modeVersion,
+      event: ssiCopilotRevisionModel.event, actorId: ssiCopilotRevisionModel.actorId, createdAt: ssiCopilotRevisionModel.createdAt,
+      textDigest: ssiCopilotRevisionModel.textDigest, snapshot: ssiCopilotRevisionModel.snapshot })
+      .from(ssiCopilotRevisionModel).where(and(eq(ssiCopilotRevisionModel.workspaceId, input.workspaceId), eq(ssiCopilotRevisionModel.conversationId, input.conversationId)))
+      .orderBy(desc(ssiCopilotRevisionModel.version)).limit(50)
+    return rows.map(({ snapshot, ...metadata }) => ({ ...metadata, draft: readSsiCopilotDraft({ ssiCopilotDraft: snapshot }) }))
   },
 
-  async review(props: {
-    workspaceId: string
-    conversationId: string
-    actorId: string
-    expectedModeVersion: number
-    expectedDraftVersion: number
-    decision: "approve" | "reject"
-  }): Promise<{
-    version: number
-    status: Exclude<SsiCopilotDraftStatus, "pending">
-  }> {
-    validateSsiCopilotDraftInput(props)
-    if (props.decision !== "approve" && props.decision !== "reject") {
-      throw new Error("Invalid Copilot review decision")
-    }
-    const status = props.decision === "approve" ? "approved_not_sent" : "rejected"
-    const revised = {
-      version: props.expectedDraftVersion + 1,
-      status,
-      reviewedBy: props.actorId,
-      reviewedAt: new Date().toISOString(),
-    }
-    const [updated] = await db.update(conversationModel)
-      .set({
-        additionalAttributes: sql`jsonb_set(
-          ${current()}, '{ssiCopilotDraft}',
-          (${currentDraft()} || ${JSON.stringify(revised)}::jsonb), true
-        )`,
-      })
-      .where(and(
-        eq(conversationModel.id, props.conversationId),
-        eq(conversationModel.workspaceId, props.workspaceId),
-        copilotModeGuard(props.expectedModeVersion),
-        draftVersionGuard(props.expectedDraftVersion),
-        sql`${currentDraft()}->>'status' = 'pending'`,
-        sql`${currentDraft()}->>'modeVersion' = ${String(props.expectedModeVersion)}`,
-        sql`${currentDraft()}->>'origin' = 'operator'`,
-        // Even a tampered pending record cannot be approved without a valid
-        // text body. Validate within the locked UPDATE, not a stale app read.
-        sql`jsonb_typeof(${currentDraft()}->'text') = 'string'`,
-        sql`length(btrim(${currentDraft()}->>'text')) BETWEEN 1 AND 8000`,
-        sql`jsonb_typeof(${currentDraft()}->'updatedBy') = 'string'`,
-        sql`length(btrim(${currentDraft()}->>'updatedBy')) > 0`,
-      ))
-      .returning({ id: conversationModel.id })
-    if (!updated) throw new Error("Copilot review lost the race or mode changed; refresh and retry")
-    // This is NOT dispatch authorization. No API/worker consumes this status.
-    return { version: revised.version, status }
+  async save(input: SsiDraftMutation & { text: string }) {
+    validateSsiCopilotDraftInput(input)
+    return db.transaction(async (tx) => {
+      await assertSsiMember({ ...input, permission: "contacts" }, tx)
+      const { conversation, draft: previous } = await lockSsiCopilotConversation(input, tx)
+      const derivedFromRunId = previous?.runId ?? previous?.derivedFromRunId
+      const draft: SsiCopilotDraft = {
+        version: input.expectedDraftVersion + 1, modeVersion: input.expectedModeVersion,
+        text: input.text.trim(), origin: "operator", status: "pending",
+        updatedBy: input.actorId, updatedAt: new Date().toISOString(),
+        ...(derivedFromRunId ? { derivedFromRunId } : {}),
+        ...(previous?.inputLastMessageId ? { inputLastMessageId: previous.inputLastMessageId } : {}),
+      }
+      return persistSsiCopilotRevision(input, draft, "operator_save", conversation.additionalAttributes, tx)
+    })
+  },
+
+  async review(input: SsiDraftMutation & { decision: "approve" | "reject" }) {
+    validateSsiCopilotDraftInput(input)
+    if (input.decision !== "approve" && input.decision !== "reject") throw new Error("Invalid Copilot review decision")
+    return db.transaction(async (tx) => {
+      await assertSsiMember({ ...input, permission: "contacts" }, tx)
+      const { conversation, draft } = await lockSsiCopilotConversation(input, tx)
+      if (!draft || draft.status !== "pending" || draft.modeVersion !== input.expectedModeVersion) throw new Error("Copilot review lost the race or mode changed; refresh and retry")
+      if (draft.origin === "ai" || draft.derivedFromRunId) {
+        const [run] = await tx.select({ outputDigest: ssiAiRunModel.outputDigest, status: ssiAiRunModel.status, sources: ssiAiRunModel.sources }).from(ssiAiRunModel).where(and(
+          eq(ssiAiRunModel.workspaceId, input.workspaceId), eq(ssiAiRunModel.conversationId, input.conversationId), eq(ssiAiRunModel.id, (draft.runId ?? draft.derivedFromRunId)!),
+        )).limit(1)
+        if (run?.status !== "completed" || (draft.origin === "ai" && run.outputDigest !== ssiTextDigest(draft.text))) throw new Error("AI draft provenance cannot be verified")
+        if (!Array.isArray(run.sources)) throw new Error("AI source references are invalid")
+        await ssiKnowledgeService.assertCurrent({ workspaceId: input.workspaceId, sources: run.sources }, tx)
+      }
+      const revised: SsiCopilotDraft = {
+        ...draft, version: draft.version + 1,
+        status: input.decision === "approve" ? "approved_not_sent" : "rejected",
+        reviewedBy: input.actorId, reviewedAt: new Date().toISOString(),
+      }
+      await persistSsiCopilotRevision(input, revised, input.decision, conversation.additionalAttributes, tx)
+      // Delivery requires its own explicit request; never change the semantics
+      // of the existing "Approve (no send)" button into a provider side effect.
+      return { version: revised.version, status: revised.status as "approved_not_sent" | "rejected" }
+    })
   },
 }

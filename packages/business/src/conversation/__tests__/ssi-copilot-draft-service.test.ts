@@ -1,130 +1,98 @@
 import { beforeEach, describe, expect, it, vi } from "vitest"
+import { ssiTextDigest } from "../../ssi-ai/policy"
 
 const mocks = vi.hoisted(() => ({
-  returning: vi.fn(),
-  findFirst: vi.fn(),
-  set: vi.fn(),
-  where: vi.fn(),
+  rows: [] as unknown[][], findFirst: vi.fn(), insert: vi.fn(), set: vi.fn(), where: vi.fn(), lock: vi.fn(), transaction: vi.fn(),
 }))
-vi.mock("@chatbotx.io/database/client", () => ({
-  sql: (strings: TemplateStringsArray, ...values: unknown[]) => ({
-    strings: Array.from(strings), values,
-  }),
-  and: (...clauses: unknown[]) => ({ and: clauses }),
-  eq: (column: unknown, value: unknown) => ({ eq: [column, value] }),
-  db: {
+vi.mock("@chatbotx.io/database/client", () => {
+  const client = {
     query: { conversationModel: { findFirst: mocks.findFirst } },
-    update: () => ({
-      set: (mutation: unknown) => {
-        mocks.set(mutation)
-        return {
-          where: (predicate: unknown) => {
-            mocks.where(predicate)
-            return { returning: () => mocks.returning() }
-          },
-        }
-      },
-    }),
-  },
-}))
+    select: () => {
+      const query = { from: () => query, where: (p: unknown) => { mocks.where(p); return query },
+        orderBy: () => query, for: (mode: string) => { mocks.lock(mode); return query }, limit: async () => mocks.rows.shift() ?? [] }
+      return query
+    },
+    insert: () => ({ values: mocks.insert }),
+    update: () => ({ set: (v: unknown) => { mocks.set(v); return { where: async (p: unknown) => { mocks.where(p) } } } }),
+    transaction: async <T>(body: (tx: unknown) => Promise<T>) => { mocks.transaction(); return body(client) },
+  }
+  return { db: client, and: (...clauses: unknown[]) => ({ and: clauses }), eq: (column: string, value: unknown) => ({ eq: [column, value] }), desc: (column: string) => ({ desc: column }), asc: vi.fn(), sql: vi.fn() }
+})
 vi.mock("@chatbotx.io/database/schema", () => ({
-  conversationModel: {
-    id: "id", workspaceId: "workspaceId",
-    botEnabled: "botEnabled", additionalAttributes: "additionalAttributes",
-  },
+  conversationModel: { id: "id", workspaceId: "workspaceId", additionalAttributes: "additionalAttributes" },
+  workspaceModel: { id: "id", ownerId: "ownerId" },
+  workspaceMemberModel: { workspaceId: "workspaceId", userId: "userId", permissions: "permissions" },
+  ssiAiRunModel: { id: "id", workspaceId: "workspaceId", conversationId: "conversationId", outputDigest: "outputDigest", status: "status", sources: "sources" },
+  ssiCopilotRevisionModel: { version: "version", modeVersion: "modeVersion", event: "event", actorId: "actorId", createdAt: "createdAt", textDigest: "textDigest", snapshot: "snapshot", workspaceId: "workspaceId", conversationId: "conversationId" },
+  aiEmbeddingModel: {}, aiFileModel: {}, ssiKnowledgeChunkModel: {}, ssiKnowledgeVersionModel: {},
 }))
 const { ssiCopilotDraftService } = await import("../ssi-copilot-draft-service")
+const shared = { workspaceId: "123", conversationId: "456", actorId: "789", expectedModeVersion: 4, expectedDraftVersion: 0 }
+const pending = { version: 1, modeVersion: 4, origin: "operator", text: "Draft", status: "pending", updatedBy: "789", updatedAt: "2026-10-14T00:00:00.000Z" }
+const conversation = (draft?: Record<string, unknown>, mode = "copilot", version = 4) => ({ id: "456", workspaceId: "123", botEnabled: false,
+  additionalAttributes: { keep: "untouched", ssiAiControl: { mode, version }, ...(draft ? { ssiCopilotDraft: draft } : {}) } })
+function authorize(row = conversation()) { mocks.rows.push([{ ownerId: "789" }], [row]) }
+beforeEach(() => { mocks.rows = []; for (const mock of [mocks.findFirst, mocks.insert, mocks.set, mocks.where, mocks.lock, mocks.transaction]) mock.mockReset(); mocks.insert.mockResolvedValue(undefined) })
 
-const shared = {
-  workspaceId: "123", conversationId: "456", actorId: "789",
-  expectedModeVersion: 4, expectedDraftVersion: 0,
-}
-
-beforeEach(() => {
-  mocks.returning.mockReset()
-  mocks.findFirst.mockReset()
-  mocks.set.mockReset()
-  mocks.where.mockReset()
-  mocks.returning.mockResolvedValue([{ id: "456" }])
-})
-
-describe("SSI Copilot staging service (NO dispatch)", () => {
-  it("stages a human-authored suggestion and guards workspace + mode + draft CAS", async () => {
+describe("SSI transactional Copilot review (no delivery side effects)", () => {
+  it("locks a tenant-scoped conversation and records the revision before updating projection", async () => {
+    authorize()
     const draft = await ssiCopilotDraftService.save({ ...shared, text: "Hello there" })
-    expect(draft).toMatchObject({
-      origin: "operator", status: "pending",
-      modeVersion: 4, version: 1, text: "Hello there",
-    })
-    const sqlShape = JSON.stringify(mocks.where.mock.calls[0])
-    expect(sqlShape).toContain("workspaceId")
-    expect(sqlShape).toContain('"456"')
-    expect(sqlShape).toContain("copilot")
-    expect(sqlShape).toContain("botEnabled")
-    expect(sqlShape).toContain("ssiCopilotDraft")
-    expect(sqlShape).toContain("ssiAiControl")
-    expect(mocks.set).toHaveBeenCalledTimes(1)
+    expect(draft).toMatchObject({ origin: "operator", status: "pending", modeVersion: 4, version: 1, text: "Hello there" })
+    expect(mocks.transaction).toHaveBeenCalledOnce()
+    expect(mocks.lock).toHaveBeenCalledWith("update")
+    expect(mocks.where.mock.calls.map((call) => JSON.stringify(call))).toContainEqual(expect.stringContaining('"workspaceId","123"'))
+    expect(mocks.insert).toHaveBeenCalledWith(expect.objectContaining({ workspaceId: "123", conversationId: "456", event: "operator_save", version: 1, textDigest: ssiTextDigest("Hello there") }))
+    expect(mocks.set).toHaveBeenCalledWith(expect.objectContaining({ additionalAttributes: expect.objectContaining({ keep: "untouched" }) }))
   })
-
-  it("records approval as approved_not_sent and never publishes delivery", async () => {
-    const verdict = await ssiCopilotDraftService.review({
-      ...shared, expectedDraftVersion: 1, decision: "approve",
-    })
-    expect(verdict).toEqual({ version: 2, status: "approved_not_sent" })
-    const predicate = JSON.stringify(mocks.where.mock.calls[0])
-    expect(predicate).toContain("pending")
-    expect(predicate).toContain("modeVersion")
-    expect(predicate).toContain("jsonb_typeof")
-    expect(predicate).toContain("BETWEEN 1 AND 8000")
-    expect(predicate).toContain("updatedBy")
-    expect(mocks.set).toHaveBeenCalledTimes(1)
+  it("records explicit approval, reviewer and content hash without sending", async () => {
+    authorize(conversation(pending))
+    const result = await ssiCopilotDraftService.review({ ...shared, expectedDraftVersion: 1, decision: "approve" })
+    expect(result).toEqual({ version: 2, status: "approved_not_sent" })
+    expect(mocks.insert).toHaveBeenCalledWith(expect.objectContaining({ event: "approve", snapshot: expect.objectContaining({ reviewedBy: "789", status: "approved_not_sent" }) }))
   })
-
-  it("fails closed on concurrent edits and approvals", async () => {
-    mocks.returning.mockResolvedValue([])
-    await expect(ssiCopilotDraftService.save({
-      ...shared, text: "A",
-    })).rejects.toThrow("refresh and retry")
-    await expect(ssiCopilotDraftService.review({
-      ...shared, expectedDraftVersion: 1, decision: "reject",
-    })).rejects.toThrow("refresh and retry")
+  it("rejects stale versions, mode changes and corrupt drafts before an audit or update", async () => {
+    for (const row of [conversation(pending), conversation(undefined, "human_only"), conversation(undefined, "copilot", 5), conversation({ ...pending, text: "" })]) {
+      authorize(row)
+      await expect(ssiCopilotDraftService.save({ ...shared, text: "new" })).rejects.toThrow("refresh and retry")
+    }
+    expect(mocks.insert).not.toHaveBeenCalled(); expect(mocks.set).not.toHaveBeenCalled()
   })
-
-  it("blocks blank draft and invalid mode revision before a database operation", async () => {
-    await expect(ssiCopilotDraftService.save({
-      ...shared, expectedModeVersion: 0, text: "test",
-    })).rejects.toThrow()
-    await expect(ssiCopilotDraftService.save({
-      ...shared, text: "   ",
-    })).rejects.toThrow()
+  it("rejects an unauthorized or cross-workspace actor", async () => {
+    mocks.rows.push([{ ownerId: "987" }], [])
+    await expect(ssiCopilotDraftService.save({ ...shared, text: "new" })).rejects.toThrow("authorized workspace member")
+    expect(mocks.lock).not.toHaveBeenCalledWith("update"); expect(mocks.insert).not.toHaveBeenCalled()
+  })
+  it("does not update projection when durable audit persistence fails", async () => {
+    authorize(); mocks.insert.mockRejectedValueOnce(new Error("audit unavailable"))
+    await expect(ssiCopilotDraftService.save({ ...shared, text: "new" })).rejects.toThrow("audit unavailable")
     expect(mocks.set).not.toHaveBeenCalled()
   })
-
-  it("only exposes draft when the current Copilot mode version matches", async () => {
-    const data = {
-      version: 2, modeVersion: 4, origin: "operator",
-      text: "Draft", status: "approved_not_sent",
-      updatedBy: "789", updatedAt: "2026-10-14T00:00:00.000Z",
-    }
-    mocks.findFirst.mockResolvedValueOnce({
-      botEnabled: false,
-      additionalAttributes: { ssiAiControl: { mode: "copilot", version: 4 }, ssiCopilotDraft: data },
-    })
-    await expect(ssiCopilotDraftService.get({
-      workspaceId: "123", conversationId: "456",
-    })).resolves.toEqual(data)
-    mocks.findFirst.mockResolvedValueOnce({
-      botEnabled: false,
-      additionalAttributes: { ssiAiControl: { mode: "copilot", version: 5 }, ssiCopilotDraft: data },
-    })
-    await expect(ssiCopilotDraftService.get({
-      workspaceId: "123", conversationId: "456",
-    })).resolves.toEqual(data)
-    mocks.findFirst.mockResolvedValueOnce({
-      botEnabled: false,
-      additionalAttributes: { ssiAiControl: { mode: "human_only", version: 4 }, ssiCopilotDraft: data },
-    })
-    await expect(ssiCopilotDraftService.get({
-      workspaceId: "123", conversationId: "456",
-    })).resolves.toBeNull()
+  it("verifies AI run ownership and exact output digest at review", async () => {
+    const ai = { ...pending, origin: "ai", runId: "555" }
+    authorize(conversation(ai)); mocks.rows.push([{ status: "completed", outputDigest: ssiTextDigest(ai.text), sources: [] }])
+    await expect(ssiCopilotDraftService.review({ ...shared, expectedDraftVersion: 1, decision: "approve" })).resolves.toEqual({ version: 2, status: "approved_not_sent" })
+    expect(JSON.stringify(mocks.where.mock.calls)).toContain('"conversationId","456"')
+    mocks.insert.mockClear(); mocks.set.mockClear()
+    authorize(conversation(ai)); mocks.rows.push([{ status: "completed", outputDigest: ssiTextDigest("different") }])
+    await expect(ssiCopilotDraftService.review({ ...shared, expectedDraftVersion: 1, decision: "approve" })).rejects.toThrow("provenance")
+    expect(mocks.insert).not.toHaveBeenCalled(); expect(mocks.set).not.toHaveBeenCalled()
+  })
+  it("attributes an edited AI draft to its human editor, preserving lineage but not approval", async () => {
+    authorize(conversation({ ...pending, origin: "ai", runId: "555" }))
+    const result = await ssiCopilotDraftService.save({ ...shared, expectedDraftVersion: 1, text: "Edited" })
+    expect(result).toMatchObject({ origin: "operator", derivedFromRunId: "555", version: 2, status: "pending" })
+    expect(result.runId).toBeUndefined(); expect(result.reviewedBy).toBeUndefined()
+  })
+  it("rejects bad input before a transaction", async () => {
+    await expect(ssiCopilotDraftService.save({ ...shared, expectedModeVersion: 0, text: "test" })).rejects.toThrow()
+    await expect(ssiCopilotDraftService.save({ ...shared, text: "   " })).rejects.toThrow()
+    expect(mocks.transaction).not.toHaveBeenCalled()
+  })
+  it("returns stale drafts for editing, but hides them outside Copilot", async () => {
+    mocks.findFirst.mockResolvedValueOnce(conversation(pending, "copilot", 5))
+    await expect(ssiCopilotDraftService.get(shared)).resolves.toEqual(pending)
+    mocks.findFirst.mockResolvedValueOnce(conversation(pending, "human_only"))
+    await expect(ssiCopilotDraftService.get(shared)).resolves.toBeNull()
   })
 })

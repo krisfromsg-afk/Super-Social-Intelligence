@@ -21,3 +21,5 @@ export const aiIntegrationService = {
   createAIInstance: createAIModelInstance,
   invalidateCache: invalidateAIIntegrationCache,
 }
+
+export * from "./ssi-copilot"
