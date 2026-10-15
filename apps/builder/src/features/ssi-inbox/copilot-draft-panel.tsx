@@ -23,11 +23,12 @@ export function SsiCopilotDraftPanel({
   const latest = useChatStore((state) =>
     state.conversations.find((item) => item.id === conversation.id),
   )
-  const control = readSsiUiControl((latest ?? conversation).additionalAttributes)
-  if (control?.mode !== "copilot") return null
+  const current = latest ?? conversation
+  const control = readSsiUiControl(current.additionalAttributes)
+  if (current.botEnabled || control?.mode !== "copilot") return null
   return (
     <SsiCopilotDraftEditor
-      key={`${conversation.id}:${control.version}`}
+      key={`${workspaceId}:${conversation.id}:${control.version}`}
       conversationId={conversation.id}
       workspaceId={workspaceId}
       modeVersion={control.version}
@@ -43,6 +44,9 @@ function SsiCopilotDraftEditor({
   const [draft, setDraft] = useState<SsiCopilotDraft | null>(null)
   const [text, setText] = useState("")
   const [error, setError] = useState<string | null>(null)
+  // Do not mutate a version-zero guess before the authorized read completes.
+  // An action failure requires a fresh read before another write or review.
+  const [loaded, setLoaded] = useState(false)
   const { execute: load, isExecuting: isLoading } = useAction(
     getSsiCopilotDraftAction.bind(null, workspaceId),
     {
@@ -51,9 +55,13 @@ function SsiCopilotDraftEditor({
           setDraft(data)
           setText(data?.text ?? "")
           setError(null)
+          setLoaded(true)
         }
       },
-      onError: ({ error: e }) => setError(e.serverError ?? "Cannot load Copilot draft"),
+      onError: ({ error: e }) => {
+        setLoaded(false)
+        setError(e.serverError ?? "Cannot load Copilot draft")
+      },
     },
   )
   const { execute: save, isExecuting: isSaving } = useAction(
@@ -62,11 +70,15 @@ function SsiCopilotDraftEditor({
       onSuccess: ({ data }) => {
         if (data) {
           setDraft(data)
+          setText(data.text)
           setError(null)
           toast.success("Draft staged for human review. Nothing was sent.")
         }
       },
-      onError: ({ error: e }) => setError(e.serverError ?? "Draft changed. Reload and retry."),
+      onError: ({ error: e }) => {
+        setLoaded(false)
+        setError(e.serverError ?? "Draft changed. Reload and retry.")
+      },
     },
   )
   const { execute: review, isExecuting: isReviewing } = useAction(
@@ -83,7 +95,10 @@ function SsiCopilotDraftEditor({
             : "Draft rejected. No message was sent.")
         }
       },
-      onError: ({ error: e }) => setError(e.serverError ?? "Review changed. Reload and retry."),
+      onError: ({ error: e }) => {
+        setLoaded(false)
+        setError(e.serverError ?? "Review changed. Reload and retry.")
+      },
     },
   )
   useEffect(() => {
@@ -92,6 +107,8 @@ function SsiCopilotDraftEditor({
 
   const busy = isLoading || isSaving || isReviewing
   const stale = draft !== null && draft.modeVersion !== modeVersion
+  // A review applies to persisted text, never an unsaved textarea revision.
+  const dirty = draft !== null && text !== draft.text
   return (
     <section
       aria-label="SSI Copilot staging"
@@ -112,7 +129,7 @@ function SsiCopilotDraftEditor({
         value={text}
         maxLength={8000}
         onChange={(event) => setText(event.target.value)}
-        disabled={busy}
+        disabled={busy || !loaded}
       />
       <p className="mt-1 text-muted-foreground text-xs">
         {draft ? `Draft v${draft.version} · ${draft.status.replaceAll("_", " ")}` : "No staged draft"}
@@ -128,7 +145,7 @@ function SsiCopilotDraftEditor({
         <Button
           size="sm"
           type="button"
-          disabled={busy || !text.trim() || text.length > 8000}
+          disabled={busy || !loaded || !text.trim() || text.length > 8000}
           onClick={() => save({
             conversationId, expectedModeVersion: modeVersion,
             expectedDraftVersion: draft?.version ?? 0, text,
@@ -136,14 +153,14 @@ function SsiCopilotDraftEditor({
         >Save for review</Button>
         {draft?.status === "pending" && !stale && (
           <>
-            <Button size="sm" variant="outline" type="button" disabled={busy}
+            <Button size="sm" variant="outline" type="button" disabled={busy || !loaded || dirty}
               onClick={() => review({
                 conversationId, expectedModeVersion: modeVersion,
                 expectedDraftVersion: draft.version, decision: "approve",
               })}>
               Approve (no send)
             </Button>
-            <Button size="sm" variant="outline" type="button" disabled={busy}
+            <Button size="sm" variant="outline" type="button" disabled={busy || !loaded || dirty}
               onClick={() => review({
                 conversationId, expectedModeVersion: modeVersion,
                 expectedDraftVersion: draft.version, decision: "reject",

@@ -4,7 +4,7 @@
 
 This checkpoint adds one **persisted operator-origin draft per conversation** using the existing `Conversation.additionalAttributes.ssiCopilotDraft` JSONB field, not a new Drizzle schema/migration. The SQL update is atomic and scoped by workspace and conversation, requires `botEnabled=false`, mode `copilot`, exact SSI AI mode version and exact draft version. Review is permitted only from `pending` and records either `approved_not_sent` or `rejected`.
 
-**No outbound delivery occurs from draft save/review.** Approval is **not** a delivery or enqueue signal. There is no LLM attribution, no send worker, and no claimable outbox. Only explicitly operator-authored suggestions can be stored; AI-origin text must be wired in through an independently verified provenance path. The client UI remains to be integrated.
+**No outbound delivery occurs from draft save/review.** Approval is **not** a delivery or enqueue signal. There is no LLM attribution, no send worker, and no claimable outbox. Only explicitly operator-authored suggestions can be stored; AI-origin text must be wired in through an independently verified provenance path. The Inbox client UI is integrated with the dedicated workspace-bound staging actions; this is not a production approval queue.
 
 ## Why staging instead of pretending the outbox is done?
 
@@ -34,3 +34,22 @@ The Ownership Safety CI includes a source-level no-send tripwire for staging act
 ### Corrupted pending-record defense
 
 Review uses the same locked SQL UPDATE that checks both CAS versions and the Copilot mode. It now also requires a nonblank 1–8000-character text body and a nonblank operator identity in the persisted JSONB record; it cannot approve an empty/tampered pending stub merely because its version and status fields appear valid. Record-integrity checks remain defense in depth, not a substitute for append-only audit, provider send idempotency or a full migration to a dedicated table.
+
+## 2026-10-15 editor safety and return-type repair
+
+The review service now explicitly returns a terminal `SsiCopilotDraftStatus` rather than widening it to `string`; this repairs the Builder TypeScript failure without a client-side cast or a weaker status model.
+
+The editor requires a successful authorized read before allowing mutations. Failed load/save/review operations lock mutation controls until reload. Unsaved textarea changes disable both approval and rejection, and a successful save replaces the visible text with the canonical server-returned text before review is possible. Conversation, workspace and AI-mode-version changes remount the editor; inconsistent `botEnabled=true` Copilot state hides it.
+
+`apps/builder/__tests__/ssi-copilot-draft-panel.test.tsx` exercises the actual React component with mocked action boundaries: initial read, new draft CAS, dirty-text review prevention, save/approve and reject, action errors/reload, stale-mode revision, in-flight disabled controls, realtime mode changes, conversation/workspace isolation and incompatible modes. The Ownership Safety workflow explicitly runs this suite alongside the existing service, permission, redaction and no-send tests. These are component/unit tests, **not live PostgreSQL or provider E2E**.
+
+Verification commands (results must be checked on the matching commit's GitHub Actions run):
+
+```sh
+pnpm --filter builder exec vitest run __tests__/ssi-copilot-draft-panel.test.tsx
+pnpm --filter builder check-types
+pnpm --filter @chatbotx.io/business exec vitest run src/conversation/__tests__/ssi-copilot-draft-state.test.ts src/conversation/__tests__/ssi-copilot-draft-service.test.ts
+node --test scripts/ssi/__tests__/copilot-staging-no-send.test.mjs
+```
+
+**Phase 02 remains PARTIAL / NOT ACCEPTED.** This repair does not close issues #3 or #4, enable outbound sending, establish append-only audit, certify production migrations, complete i18n/a11y acceptance or clear licensing. Keep canonical PR #5 draft.

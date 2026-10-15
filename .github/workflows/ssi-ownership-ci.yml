@@ -9,6 +9,7 @@ on:
       - 'apps/builder/src/features/ssi-inbox/**'
       - 'apps/builder/src/features/conversations/actions/set-ssi-ai-mode.action.ts'
       - 'apps/builder/__tests__/message-thread-pane-scroll.test.tsx'
+      - 'apps/builder/__tests__/ssi-copilot-draft-panel.test.tsx'
       - 'packages/business/src/conversation/**'
       - 'apps/builder/src/features/conversations/actions/*ssi-copilot-draft*'
       - 'apps/builder/src/features/conversations/ssi-copilot-draft-permissions.ts'
@@ -20,6 +21,7 @@ on:
       - 'apps/builder/src/features/ssi-inbox/**'
       - 'apps/builder/src/features/conversations/actions/set-ssi-ai-mode.action.ts'
       - 'apps/builder/__tests__/message-thread-pane-scroll.test.tsx'
+      - 'apps/builder/__tests__/ssi-copilot-draft-panel.test.tsx'
       - 'packages/business/src/conversation/**'
       - '.github/workflows/ssi-ownership-ci.yml'
 
@@ -62,4 +64,4 @@ jobs:
       - name: Verify private Copilot drafts never appear in conversation API output
         run: pnpm --filter builder exec vitest run src/features/conversations/lib/__tests__/strip-ssi-copilot-draft.test.ts
       - name: SSI client mode and browser-pane isolation
-        run: pnpm --filter builder exec vitest run src/features/ssi-inbox/__tests__/ui-ai-control.test.ts __tests__/message-thread-pane-scroll.test.tsx
+        run: pnpm --filter builder exec vitest run src/features/ssi-inbox/__tests__/ui-ai-control.test.ts __tests__/message-thread-pane-scroll.test.tsx __tests__/ssi-copilot-draft-panel.test.tsx
